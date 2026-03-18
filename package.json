@@ -1,0 +1,49 @@
+{
+  "name": "@prsm/realtime",
+  "version": "1.0.0",
+  "description": "Distributed WebSocket framework with Redis-backed rooms, records, presence, channels, collections, and persistence",
+  "type": "module",
+  "license": "ISC",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client/index.js",
+    "./sqlite": "./src/adapters/sqlite.js",
+    "./postgres": "./src/adapters/postgres.js",
+    "./devtools": "./src/devtools/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "vitest run --reporter verbose"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "eventemitter3": "^5.0.1",
+    "fast-json-patch": "^3.1.1",
+    "ioredis": "^5.6.1",
+    "ws": "^8.18.0"
+  },
+  "peerDependencies": {
+    "express": "^4.0.0 || ^5.0.0",
+    "pg": "^8.0.0",
+    "sqlite3": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    },
+    "sqlite3": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "ioredis": "^5.6.1",
+    "vitest": "^3.2.4"
+  }
+}

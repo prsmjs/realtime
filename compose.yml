@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: realtime-redis
+    platform: linux/amd64
+    ports:
+      - "6379:6379"
+    volumes:
+      - realtime-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: realtime-postgres
+    platform: linux/amd64
+    environment:
+      POSTGRES_DB: realtime_test
+      POSTGRES_USER: realtime
+      POSTGRES_PASSWORD: realtime_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - realtime-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U realtime -d realtime_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  realtime-redis-data:
+  realtime-postgres-data:
