@@ -533,6 +533,16 @@ export class RealtimeServer {
   }
 
   /**
+   * @param {(metadata: any) => boolean} predicate
+   * @param {string} command
+   * @param {any} payload
+   * @returns {Promise<void>}
+   */
+  async sendToWhere(predicate, command, payload) {
+    return this.broadcastManager.sendToWhere(predicate, command, payload)
+  }
+
+  /**
    * @param {string} command
    * @param {any} payload
    * @param {Connection[]} [connections] - specific connections to target, or all if omitted

@@ -329,6 +329,104 @@ describe("sendTo", () => {
   })
 })
 
+describe("sendToWhere", () => {
+  let server
+  let clients = []
+
+  beforeEach(async () => {
+    await ctx.flush()
+    server = createTestServer()
+  })
+
+  afterEach(async () => {
+    for (const c of clients) await c.close()
+    clients = []
+    if (server) await server.close()
+  })
+
+  test("sends to all connections matching metadata predicate", async () => {
+    server.onConnection(async (connection) => {
+      await server.setConnectionMetadata(connection.id, { userId: connection.id.slice(0, 8) })
+    })
+    await server.listen(0)
+
+    const makeClient = async () => {
+      const c = new RealtimeClient(`ws://localhost:${server.port}`)
+      await c.connect()
+      clients.push(c)
+      return c
+    }
+
+    const clientA = await makeClient()
+    const clientB = await makeClient()
+    const clientC = await makeClient()
+    await wait(100)
+
+    await server.setConnectionMetadata(clientA.connectionId, { userId: "user_1" })
+    await server.setConnectionMetadata(clientB.connectionId, { userId: "user_1" })
+    await server.setConnectionMetadata(clientC.connectionId, { userId: "user_2" })
+
+    const messagesA = []
+    const messagesB = []
+    const messagesC = []
+    clientA.on("message", (data) => { if (data.command === "notify") messagesA.push(data.payload) })
+    clientB.on("message", (data) => { if (data.command === "notify") messagesB.push(data.payload) })
+    clientC.on("message", (data) => { if (data.command === "notify") messagesC.push(data.payload) })
+
+    await server.sendToWhere((meta) => meta.userId === "user_1", "notify", { job: "done" })
+    await wait(300)
+
+    expect(messagesA.length).toBe(1)
+    expect(messagesA[0].job).toBe("done")
+    expect(messagesB.length).toBe(1)
+    expect(messagesB[0].job).toBe("done")
+    expect(messagesC.length).toBe(0)
+  })
+
+  test("sends to no one when no metadata matches", async () => {
+    await server.listen(0)
+
+    const client = new RealtimeClient(`ws://localhost:${server.port}`)
+    await client.connect()
+    clients.push(client)
+    await wait(100)
+
+    await server.setConnectionMetadata(client.connectionId, { userId: "user_1" })
+
+    const messages = []
+    client.on("message", (data) => { if (data.command === "notify") messages.push(data.payload) })
+
+    await server.sendToWhere((meta) => meta.userId === "nobody", "notify", { job: "done" })
+    await wait(300)
+
+    expect(messages.length).toBe(0)
+  })
+
+  test("handles connections with no metadata", async () => {
+    await server.listen(0)
+
+    const clientA = new RealtimeClient(`ws://localhost:${server.port}`)
+    const clientB = new RealtimeClient(`ws://localhost:${server.port}`)
+    await clientA.connect()
+    await clientB.connect()
+    clients.push(clientA, clientB)
+    await wait(100)
+
+    await server.setConnectionMetadata(clientA.connectionId, { userId: "user_1" })
+
+    const messagesA = []
+    const messagesB = []
+    clientA.on("message", (data) => { if (data.command === "notify") messagesA.push(data.payload) })
+    clientB.on("message", (data) => { if (data.command === "notify") messagesB.push(data.payload) })
+
+    await server.sendToWhere((meta) => meta?.userId === "user_1", "notify", { job: "done" })
+    await wait(300)
+
+    expect(messagesA.length).toBe(1)
+    expect(messagesB.length).toBe(0)
+  })
+})
+
 describe("attach", () => {
   let server
   let client

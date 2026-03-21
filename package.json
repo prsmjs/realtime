@@ -1,6 +1,6 @@
 {
   "name": "@prsm/realtime",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Distributed WebSocket framework with Redis-backed rooms, records, presence, channels, collections, and persistence",
   "type": "module",
   "license": "ISC",

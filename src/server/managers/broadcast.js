@@ -62,6 +62,17 @@ export class BroadcastManager {
     }
   }
 
+  async sendToWhere(predicate, command, payload) {
+    try {
+      const allMeta = await this.connectionManager.getAllMetadata()
+      const matching = allMeta.filter(({ metadata }) => predicate(metadata))
+      if (matching.length === 0) return
+      await this._publishOrSend(matching.map(({ id }) => id), { command, payload })
+    } catch (err) {
+      this.emitError(new Error(`Failed to sendToWhere for command "${command}": ${err}`))
+    }
+  }
+
   async _publishOrSend(connectionIds, command) {
     if (connectionIds.length === 0) return
     const connectionInstanceMapping = await this.connectionManager.getInstanceIdsForConnections(connectionIds)
