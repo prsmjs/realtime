@@ -62,6 +62,41 @@ export class BroadcastManager {
     }
   }
 
+  async getConnectionsWhere(predicate) {
+    return this.connectionManager.getConnectionsWhere(predicate)
+  }
+
+  async disconnectWhere(predicate) {
+    try {
+      const matching = await this.connectionManager.getConnectionsWhere(predicate)
+      if (matching.length === 0) return
+      const connectionIds = matching.map(({ id }) => id)
+      const connectionInstanceMapping = await this.connectionManager.getInstanceIdsForConnections(connectionIds)
+      const instanceMap = {}
+      for (const connectionId of connectionIds) {
+        const instanceId = connectionInstanceMapping[connectionId]
+        if (instanceId) {
+          if (!instanceMap[instanceId]) instanceMap[instanceId] = []
+          instanceMap[instanceId].push(connectionId)
+        }
+      }
+      for (const [instanceId, targetConnectionIds] of Object.entries(instanceMap)) {
+        if (targetConnectionIds.length === 0) continue
+        if (instanceId === this.instanceId) {
+          targetConnectionIds.forEach((connectionId) => {
+            const connection = this.connectionManager.getLocalConnection(connectionId)
+            if (connection && !connection.isDead) connection.close()
+          })
+        } else {
+          const message = JSON.stringify({ targetConnectionIds, action: "disconnect" })
+          await this.pubClient.publish(this.getPubSubChannel(instanceId), message)
+        }
+      }
+    } catch (err) {
+      this.emitError(new Error(`Failed to disconnectWhere: ${err}`))
+    }
+  }
+
   async sendToWhere(predicate, command, payload) {
     try {
       const allMeta = await this.connectionManager.getAllMetadata()

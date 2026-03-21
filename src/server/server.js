@@ -542,6 +542,16 @@ export class RealtimeServer {
     return this.broadcastManager.sendToWhere(predicate, command, payload)
   }
 
+  /** @param {(metadata: any) => boolean} predicate @returns {Promise<Array<{id: string, metadata: any}>>} */
+  async getConnectionsWhere(predicate) {
+    return this.broadcastManager.getConnectionsWhere(predicate)
+  }
+
+  /** @param {(metadata: any) => boolean} predicate @returns {Promise<void>} */
+  async disconnectWhere(predicate) {
+    return this.broadcastManager.disconnectWhere(predicate)
+  }
+
   /**
    * @param {string} command
    * @param {any} payload

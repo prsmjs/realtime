@@ -427,6 +427,121 @@ describe("sendToWhere", () => {
   })
 })
 
+describe("getConnectionsWhere", () => {
+  let server
+  let clients = []
+
+  beforeEach(async () => {
+    await ctx.flush()
+    server = createTestServer()
+  })
+
+  afterEach(async () => {
+    for (const c of clients) await c.close()
+    clients = []
+    if (server) await server.close()
+  })
+
+  test("returns connections matching metadata predicate", async () => {
+    await server.listen(0)
+
+    const makeClient = async () => {
+      const c = new RealtimeClient(`ws://localhost:${server.port}`)
+      await c.connect()
+      clients.push(c)
+      return c
+    }
+
+    const clientA = await makeClient()
+    const clientB = await makeClient()
+    const clientC = await makeClient()
+    await wait(100)
+
+    await server.setConnectionMetadata(clientA.connectionId, { role: "admin" })
+    await server.setConnectionMetadata(clientB.connectionId, { role: "admin" })
+    await server.setConnectionMetadata(clientC.connectionId, { role: "viewer" })
+
+    const admins = await server.getConnectionsWhere((meta) => meta?.role === "admin")
+    expect(admins.length).toBe(2)
+    const adminIds = admins.map(({ id }) => id).sort()
+    expect(adminIds).toEqual([clientA.connectionId, clientB.connectionId].sort())
+  })
+
+  test("returns empty array when nothing matches", async () => {
+    await server.listen(0)
+
+    const client = new RealtimeClient(`ws://localhost:${server.port}`)
+    await client.connect()
+    clients.push(client)
+    await wait(100)
+
+    await server.setConnectionMetadata(client.connectionId, { role: "viewer" })
+
+    const result = await server.getConnectionsWhere((meta) => meta?.role === "admin")
+    expect(result.length).toBe(0)
+  })
+})
+
+describe("disconnectWhere", () => {
+  let server
+  let clients = []
+
+  beforeEach(async () => {
+    await ctx.flush()
+    server = createTestServer()
+  })
+
+  afterEach(async () => {
+    for (const c of clients) await c.close()
+    clients = []
+    if (server) await server.close()
+  })
+
+  test("disconnects all connections matching metadata predicate", async () => {
+    await server.listen(0)
+
+    const makeClient = async () => {
+      const c = new RealtimeClient(`ws://localhost:${server.port}`, { shouldReconnect: false })
+      await c.connect()
+      clients.push(c)
+      return c
+    }
+
+    const clientA = await makeClient()
+    const clientB = await makeClient()
+    const clientC = await makeClient()
+    await wait(100)
+
+    await server.setConnectionMetadata(clientA.connectionId, { userId: "banned_user" })
+    await server.setConnectionMetadata(clientB.connectionId, { userId: "banned_user" })
+    await server.setConnectionMetadata(clientC.connectionId, { userId: "good_user" })
+
+    const disconnectedA = new Promise((resolve) => clientA.on("close", resolve))
+    const disconnectedB = new Promise((resolve) => clientB.on("close", resolve))
+
+    await server.disconnectWhere((meta) => meta?.userId === "banned_user")
+    await Promise.all([disconnectedA, disconnectedB])
+
+    expect(clientC.status).toBe(3) // still online
+  })
+
+  test("does nothing when no metadata matches", async () => {
+    await server.listen(0)
+
+    const client = new RealtimeClient(`ws://localhost:${server.port}`)
+    await client.connect()
+    clients.push(client)
+    await wait(100)
+
+    await server.setConnectionMetadata(client.connectionId, { userId: "safe_user" })
+
+    await server.disconnectWhere((meta) => meta?.userId === "nobody")
+    await wait(300)
+
+    expect(client.status).toBe(3) // still online
+  })
+})
+
 describe("attach", () => {
   let server
   let client

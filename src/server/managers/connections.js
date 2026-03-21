@@ -103,6 +103,11 @@ export class ConnectionManager {
     })
   }
 
+  async getConnectionsWhere(predicate) {
+    const allMeta = await this.getAllMetadata()
+    return allMeta.filter(({ metadata }) => predicate(metadata))
+  }
+
   async cleanupConnection(connection) {
     delete this.localConnections[connection.id]
     await this.deregisterConnection(connection)

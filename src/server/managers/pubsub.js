@@ -81,10 +81,22 @@ export class PubSubManager {
   _handleInstancePubSubMessage(_channel, message) {
     try {
       const parsedMessage = JSON.parse(message)
-      if (!parsedMessage || !Array.isArray(parsedMessage.targetConnectionIds) || !parsedMessage.command || typeof parsedMessage.command.command !== "string") {
+      if (!parsedMessage || !Array.isArray(parsedMessage.targetConnectionIds)) {
         throw new Error("Invalid message format")
       }
-      const { targetConnectionIds, command } = parsedMessage
+      const { targetConnectionIds, action, command } = parsedMessage
+
+      if (action === "disconnect") {
+        targetConnectionIds.forEach((connectionId) => {
+          const connection = this.connectionManager.getLocalConnection(connectionId)
+          if (connection && !connection.isDead) connection.close()
+        })
+        return
+      }
+
+      if (!command || typeof command.command !== "string") {
+        throw new Error("Invalid message format")
+      }
       targetConnectionIds.forEach((connectionId) => {
         const connection = this.connectionManager.getLocalConnection(connectionId)
         if (connection && !connection.isDead) connection.send(command)
