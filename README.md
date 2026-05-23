@@ -79,33 +79,73 @@ The client handles automatic reconnection with backoff, queued commands while di
 
 ## Vue layer
 
-`@prsm/realtime/vue` ships composables and renderless components that wrap the imperative client with reactive state and automatic lifecycle.
+`@prsm/realtime/vue` ships composables and renderless components that wrap the imperative client with reactive state and automatic lifecycle (subscribe on mount, unsubscribe on unmount, switch subscription when reactive keys change).
 
-```js
-// at the root of your app
-import { createApp } from 'vue'
+### Setup
+
+Create a `RealtimeClient` once, connect it, and make it available to descendant components. The recommended pattern is to do this at the root of the app:
+
+```vue
+<!-- App.vue -->
+<script setup>
 import { RealtimeClient } from '@prsm/realtime/client'
 import { provideRealtime } from '@prsm/realtime/vue'
 
 const client = new RealtimeClient('ws://localhost:3000')
 await client.connect()
 
-const app = createApp(App)
-app.provide(/* provide via a parent component or use provideRealtime in setup() */)
+provideRealtime(client)
+</script>
+
+<template>
+  <router-view />
+</template>
 ```
 
+`provideRealtime(client)` is a one-line helper that calls Vue's `provide()` with the right injection key. Every composable below this component automatically picks up the client via `inject()` — you don't have to thread `client` through props or pass it to each composable.
+
+### Using composables
+
+Inside any component descended from `provideRealtime(client)`:
+
 ```vue
-<!-- inside any setup() that descends from a provideRealtime() call -->
 <script setup>
 import { useRoom, useRecord, useChannel, useCollection, usePresence } from '@prsm/realtime/vue'
 
-const { members, presence } = useRoom('lobby')                       // auto-join / auto-leave
-const { value: doc, write } = useRecord('doc:welcome')               // reactive record
-const { messages } = useChannel('notifications', { max: 50 })        // bounded message history
-const { items } = useCollection('inbox')                             // diff-applied list
+// auto-joins the room on mount, leaves on unmount
+const { members, presence } = useRoom('lobby')
+
+// reactive value; updates flow in from the server; write() pushes back
+const { value: doc, write } = useRecord('doc:welcome')
+
+// bounded message log; new messages append; oldest drop after 50
+const { messages } = useChannel('notifications', { max: 50 })
+
+// resolves the collection's record IDs and keeps an items list in sync
+const { items } = useCollection('inbox')
+
+// `me` is a ref<state> that publishes to the server on change;
+// `others` is the live map of other connections' states
 const { me, others } = usePresence('lobby', { initial: { status: 'online' } })
 </script>
+
+<template>
+  <p>{{ members.length }} in the room</p>
+  <input v-model="me.status" placeholder="status..." />
+  <pre>{{ doc }}</pre>
+</template>
 ```
+
+### Passing the client explicitly
+
+If you can't use the provide tree (tests, isolated components, a second connection), pass the client directly to any composable:
+
+```js
+useRoom('lobby', { client })
+useRecord('doc:1', { client })
+```
+
+The provide pattern is just sugar over this — pick whichever fits.
 
 All composables mount cleanly: subscribing on `onMounted`, unsubscribing on `onBeforeUnmount`. Switching the reactive key (e.g. `useRoom(activeRoom)` where `activeRoom` is a `ref`) tears down the previous subscription and starts a new one automatically.
 
