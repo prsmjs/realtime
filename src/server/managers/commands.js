@@ -2,10 +2,11 @@ import { Context } from "../context.js"
 import { CodeError } from "../../shared/index.js"
 
 export class CommandManager {
-  constructor() {
+  constructor(opts = {}) {
     this.commands = {}
     this.globalMiddlewares = []
     this.middlewares = {}
+    this._tracer = opts.tracer ?? null
   }
 
   exposeCommand(command, callback, middlewares = []) {
@@ -28,7 +29,7 @@ export class CommandManager {
 
   async runCommand(id, commandName, payload, connection, server) {
     const context = new Context(server, commandName, connection, payload)
-    try {
+    const exec = async () => {
       if (!this.commands[commandName]) {
         throw new CodeError(`Command "${commandName}" not found`, "ENOTFOUND", "CommandError")
       }
@@ -40,7 +41,26 @@ export class CommandManager {
           await middleware(context)
         }
       }
-      const result = await this.commands[commandName](context)
+      return await this.commands[commandName](context)
+    }
+    try {
+      let result
+      if (this._tracer && !commandName.startsWith('rt/')) {
+        const handle = this._tracer.startSpan(`realtime.command:${commandName}`, {
+          'realtime.command': commandName,
+          'realtime.connectionId': connection.id,
+        }, { kind: 'server' })
+        try {
+          result = await this._tracer.run(handle.context, exec)
+        } catch (err) {
+          handle.setError(err)
+          throw err
+        } finally {
+          handle.end()
+        }
+      } else {
+        result = await exec()
+      }
       connection.send({ id, command: commandName, payload: result })
     } catch (err) {
       const errorPayload = err instanceof Error

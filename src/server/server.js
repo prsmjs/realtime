@@ -44,6 +44,7 @@ export class RealtimeServer {
     this._wss = null
     this._httpServer = null
     this._authenticateConnection = opts.authenticateConnection
+    this._tracer = opts.tracer ?? null
 
     this.serverOptions = {
       ...opts,
@@ -75,7 +76,7 @@ export class RealtimeServer {
       this.redisManager.enableKeyspaceNotifications().catch((err) => this._emitError(new Error(`Failed to enable keyspace notifications: ${err}`)))
     }
 
-    this.commandManager = new CommandManager()
+    this.commandManager = new CommandManager({ tracer: this._tracer })
     this.messageStream = new MessageStream()
 
     this.persistenceManager = opts.persistence
@@ -354,7 +355,9 @@ export class RealtimeServer {
    * @returns {Promise<void>}
    */
   async writeChannel(channel, message, history = 0) {
-    return this.channelManager.writeChannel(channel, message, history, this.instanceId)
+    if (!this._tracer) return this.channelManager.writeChannel(channel, message, history, this.instanceId)
+    return this._tracer.span('realtime.writeChannel', { 'realtime.channel': channel }, () =>
+      this.channelManager.writeChannel(channel, message, history, this.instanceId))
   }
 
   /**
@@ -397,7 +400,9 @@ export class RealtimeServer {
    * @returns {Promise<void>}
    */
   async writeRecord(recordId, newValue, options) {
-    return this.recordSubscriptionManager.writeRecord(recordId, newValue, options)
+    if (!this._tracer) return this.recordSubscriptionManager.writeRecord(recordId, newValue, options)
+    return this._tracer.span('realtime.writeRecord', { 'realtime.recordId': recordId }, () =>
+      this.recordSubscriptionManager.writeRecord(recordId, newValue, options))
   }
 
   /** @param {string} recordId @returns {Promise<any>} */
