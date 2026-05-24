@@ -1,9 +1,10 @@
 import { serverLogger } from "../../shared/index.js"
 
 export class InstanceManager {
-  constructor({ redis, instanceId }) {
+  constructor({ redis, instanceId, getRegistry }) {
     this.redis = redis
     this.instanceId = instanceId
+    this.getRegistry = typeof getRegistry === "function" ? getRegistry : null
     this.heartbeatInterval = null
     this.heartbeatTTL = 120
     this.heartbeatFrequency = 15000
@@ -34,10 +35,34 @@ export class InstanceManager {
   async _deregisterInstance() {
     await this.redis.srem("rt:instances", this.instanceId)
     await this.redis.del(`rt:instance:${this.instanceId}:heartbeat`)
+    await this.redis.del(`rt:instance:${this.instanceId}:registry`)
   }
 
   async _updateHeartbeat() {
     await this.redis.set(`rt:instance:${this.instanceId}:heartbeat`, Date.now().toString(), "EX", this.heartbeatTTL)
+    if (this.getRegistry) {
+      try {
+        const snapshot = this.getRegistry()
+        await this.redis.set(`rt:instance:${this.instanceId}:registry`, JSON.stringify(snapshot), "EX", this.heartbeatTTL)
+      } catch {}
+    }
+  }
+
+  async getAllRegistries() {
+    try {
+      const ids = await this.redis.smembers("rt:instances")
+      if (!ids.length) return {}
+      const keys = ids.map((id) => `rt:instance:${id}:registry`)
+      const values = await this.redis.mget(keys)
+      const out = {}
+      ids.forEach((id, i) => {
+        if (!values[i]) return
+        try { out[id] = JSON.parse(values[i]) } catch {}
+      })
+      return out
+    } catch {
+      return {}
+    }
   }
 
   async _acquireCleanupLock() {
@@ -85,6 +110,7 @@ export class InstanceManager {
       }
       await this.redis.srem("rt:instances", instanceId)
       await this.redis.del(connectionsKey)
+      await this.redis.del(`rt:instance:${instanceId}:registry`)
       serverLogger.info("cleaned up dead instance", { instanceId })
     } catch (error) {
       serverLogger.error("error cleaning up instance", { instanceId, err: error })

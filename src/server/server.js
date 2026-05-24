@@ -60,7 +60,11 @@ export class RealtimeServer {
     this.redisManager = new RedisManager()
     this.redisManager.initialize(opts.redis, (err) => this._emitError(err))
 
-    this.instanceManager = new InstanceManager({ redis: this.redisManager.redis, instanceId: this.instanceId })
+    this.instanceManager = new InstanceManager({
+      redis: this.redisManager.redis,
+      instanceId: this.instanceId,
+      getRegistry: () => this._snapshotExposed(),
+    })
 
     this.roomManager = new RoomManager({ redis: this.redisManager.redis })
     this.recordManager = new RecordManager({ redis: this.redisManager.redis, server: this })
@@ -605,6 +609,32 @@ export class RealtimeServer {
    */
   trackPresence(roomPattern, guardOrOptions) {
     this.presenceManager.trackRoom(roomPattern, guardOrOptions)
+  }
+
+  _patternToString(p) {
+    if (typeof p === "string") return p
+    if (p instanceof RegExp) return p.toString()
+    return String(p)
+  }
+
+  _snapshotExposed() {
+    return {
+      instanceId: this.instanceId,
+      channels: this.channelManager.exposedChannels.map((p) => this._patternToString(p)),
+      records: this.recordSubscriptionManager.exposedRecords.map((p) => this._patternToString(p)),
+      writableRecords: this.recordSubscriptionManager.exposedWritableRecords.map((p) => this._patternToString(p)),
+      collections: this.collectionManager.exposedCollections.map((e) => this._patternToString(e.pattern)),
+      presence: this.presenceManager.trackedRooms.map((p) => this._patternToString(p)),
+      commands: this.commandManager.commands
+        ? Object.keys(this.commandManager.commands).filter((c) => !c.startsWith("rt/"))
+        : [],
+    }
+  }
+
+  async getExposedRegistryAcrossInstances() {
+    const registries = await this.instanceManager.getAllRegistries()
+    registries[this.instanceId] = this._snapshotExposed()
+    return registries
   }
 
   _registerBuiltinCommands() {

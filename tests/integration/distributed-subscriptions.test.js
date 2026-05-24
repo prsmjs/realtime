@@ -94,6 +94,29 @@ describe("distributed subscriptions across instances", () => {
     expect(await server2.recordSubscriptionManager.getAllSubscribers("doc:42")).not.toHaveProperty(connId)
   })
 
+  test("getExposedRegistryAcrossInstances returns each instance's registry", async () => {
+    // server2 also has an extra pattern only on it
+    server2.exposeChannel(/^extra:.+$/)
+
+    // wait for both to heartbeat their registry
+    await wait(50)
+    await server1.instanceManager._updateHeartbeat()
+    await server2.instanceManager._updateHeartbeat()
+
+    const registry = await server1.getExposedRegistryAcrossInstances()
+    const instanceIds = Object.keys(registry)
+    expect(instanceIds).toContain(server1.instanceId)
+    expect(instanceIds).toContain(server2.instanceId)
+
+    // both have the chat pattern
+    expect(registry[server1.instanceId].channels).toContain("/^chat:.+$/")
+    expect(registry[server2.instanceId].channels).toContain("/^chat:.+$/")
+
+    // only server2 has the extra pattern
+    expect(registry[server2.instanceId].channels).toContain("/^extra:.+$/")
+    expect(registry[server1.instanceId].channels).not.toContain("/^extra:.+$/")
+  })
+
   test("listAllChannels aggregates across instances", async () => {
     clientA = new RealtimeClient(`ws://localhost:${server1.port}`)
     clientB = new RealtimeClient(`ws://localhost:${server2.port}`)
