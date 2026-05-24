@@ -102,7 +102,7 @@ provideRealtime(client)
 </template>
 ```
 
-`provideRealtime(client)` is a one-line helper that calls Vue's `provide()` with the right injection key. Every composable below this component automatically picks up the client via `inject()` — you don't have to thread `client` through props or pass it to each composable.
+`provideRealtime(client)` is a one-line helper that calls Vue's `provide()` with the right injection key. Every composable below this component automatically picks up the client via `inject()` - you don't have to thread `client` through props or pass it to each composable.
 
 ### Using composables
 
@@ -145,7 +145,7 @@ useRoom('lobby', { client })
 useRecord('doc:1', { client })
 ```
 
-The provide pattern is just sugar over this — pick whichever fits.
+The provide pattern is just sugar over this - pick whichever fits.
 
 All composables mount cleanly: subscribing on `onMounted`, unsubscribing on `onBeforeUnmount`. Switching the reactive key (e.g. `useRoom(activeRoom)` where `activeRoom` is a `ref`) tears down the previous subscription and starts a new one automatically.
 
@@ -163,24 +163,6 @@ For the cases where you want the side effect to live in the template:
 </RealtimeRecord>
 
 <RealtimePresence room="lobby" :state="{ status, cursor }" />
-```
-
-### Provide pattern
-
-```js
-// in a top-level component's setup()
-import { provideRealtime } from '@prsm/realtime/vue'
-import { RealtimeClient } from '@prsm/realtime/client'
-
-const client = new RealtimeClient('ws://localhost:3000')
-await client.connect()
-provideRealtime(client)
-```
-
-Every composable below this provider injects the client automatically. To use a composable outside the provider tree (tests, special cases), pass it explicitly:
-
-```js
-useRoom('lobby', { client })
 ```
 
 `vue` is an optional peer dependency. The `/vue` subpath only loads if you import from it.
