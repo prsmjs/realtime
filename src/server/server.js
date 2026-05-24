@@ -101,6 +101,7 @@ export class RealtimeServer {
 
     this.recordSubscriptionManager = new RecordSubscriptionManager({
       pubClient: this.redisManager.pubClient,
+      redis: this.redisManager.redis,
       recordManager: this.recordManager,
       emitError: (err) => this._emitError(err),
       persistenceManager: this.persistenceManager,
@@ -618,7 +619,7 @@ export class RealtimeServer {
         if (!this.channelManager.getSubscribers(channel)) {
           await this.channelManager.subscribeToRedisChannel(channel)
         }
-        this.channelManager.addSubscription(channel, ctx.connection)
+        await this.channelManager.addSubscription(channel, ctx.connection)
         const history = historyLimit && historyLimit > 0 ? await this.channelManager.getChannelHistory(channel, historyLimit, since) : []
         return { success: true, history }
       } catch {
@@ -628,7 +629,7 @@ export class RealtimeServer {
 
     this.exposeCommand("rt/unsubscribe-channel", async (ctx) => {
       const { channel } = ctx.payload
-      const wasSubscribed = this.channelManager.removeSubscription(channel, ctx.connection)
+      const wasSubscribed = await this.channelManager.removeSubscription(channel, ctx.connection)
       if (wasSubscribed && !this.channelManager.getSubscribers(channel)) {
         await this.channelManager.unsubscribeFromRedisChannel(channel)
       }
@@ -724,7 +725,7 @@ export class RealtimeServer {
       }
       try {
         const { record, version } = await this.recordManager.getRecordAndVersion(recordId)
-        this.recordSubscriptionManager.addSubscription(recordId, connectionId, mode)
+        await this.recordSubscriptionManager.addSubscription(recordId, connectionId, mode)
         return { success: true, record, version }
       } catch (e) {
         serverLogger.error("failed to subscribe to record", { recordId, err: e })
@@ -734,7 +735,7 @@ export class RealtimeServer {
 
     this.exposeCommand("rt/unsubscribe-record", async (ctx) => {
       const { recordId } = ctx.payload
-      return this.recordSubscriptionManager.removeSubscription(recordId, ctx.connection.id)
+      return await this.recordSubscriptionManager.removeSubscription(recordId, ctx.connection.id)
     })
 
     this.exposeCommand("rt/publish-record-update", async (ctx) => {
@@ -757,8 +758,9 @@ export class RealtimeServer {
       }
       try {
         const presenceChannel = `rt:presence:updates:${roomName}`
-        this.channelManager.addSubscription(presenceChannel, ctx.connection)
-        if (!this.channelManager.getSubscribers(presenceChannel) || this.channelManager.getSubscribers(presenceChannel)?.size === 1) {
+        const wasEmpty = !this.channelManager.getSubscribers(presenceChannel)
+        await this.channelManager.addSubscription(presenceChannel, ctx.connection)
+        if (wasEmpty || this.channelManager.getSubscribers(presenceChannel)?.size === 1) {
           await this.channelManager.subscribeToRedisChannel(presenceChannel)
         }
         const present = await this.getRoomMembersWithMetadata(roomName)
@@ -775,7 +777,7 @@ export class RealtimeServer {
     this.exposeCommand("rt/unsubscribe-presence", async (ctx) => {
       const { roomName } = ctx.payload
       const presenceChannel = `rt:presence:updates:${roomName}`
-      return this.channelManager.removeSubscription(presenceChannel, ctx.connection)
+      return await this.channelManager.removeSubscription(presenceChannel, ctx.connection)
     })
 
     this.exposeCommand("rt/publish-presence-state", async (ctx) => {
@@ -855,8 +857,8 @@ export class RealtimeServer {
       await this.presenceManager.cleanupConnection(connection)
       await this.connectionManager.cleanupConnection(connection)
       await this.roomManager.cleanupConnection(connection)
-      this.recordSubscriptionManager.cleanupConnection(connection)
-      this.channelManager.cleanupConnection(connection)
+      await this.recordSubscriptionManager.cleanupConnection(connection)
+      await this.channelManager.cleanupConnection(connection)
       await this.collectionManager.cleanupConnection(connection)
     } catch (err) {
       this._emitError(new Error(`Failed to clean up connection: ${err}`))

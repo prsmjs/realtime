@@ -1,8 +1,9 @@
 import { RECORD_PUB_SUB_CHANNEL } from "../utils/constants.js"
 
 export class RecordSubscriptionManager {
-  constructor({ pubClient, recordManager, emitError, persistenceManager }) {
+  constructor({ pubClient, recordManager, emitError, persistenceManager, redis }) {
     this.pubClient = pubClient
+    this.redis = redis ?? pubClient
     this.recordManager = recordManager
     this.persistenceManager = persistenceManager || null
     this.exposedRecords = []
@@ -62,25 +63,68 @@ export class RecordSubscriptionManager {
     return true
   }
 
-  addSubscription(recordId, connectionId, mode) {
+  async addSubscription(recordId, connectionId, mode) {
     if (!this.recordSubscriptions.has(recordId)) {
       this.recordSubscriptions.set(recordId, new Map())
     }
     this.recordSubscriptions.get(recordId).set(connectionId, mode)
+    try {
+      const pipeline = this.redis.pipeline()
+      pipeline.hset(`rt:rec:subs:${recordId}`, connectionId, mode)
+      pipeline.sadd(`rt:conn:subs:records:${connectionId}`, recordId)
+      await pipeline.exec()
+    } catch {}
   }
 
-  removeSubscription(recordId, connectionId) {
+  async removeSubscription(recordId, connectionId) {
+    let removed = false
     const recordSubs = this.recordSubscriptions.get(recordId)
     if (recordSubs?.has(connectionId)) {
       recordSubs.delete(connectionId)
       if (recordSubs.size === 0) this.recordSubscriptions.delete(recordId)
-      return true
+      removed = true
     }
-    return false
+    try {
+      const pipeline = this.redis.pipeline()
+      pipeline.hdel(`rt:rec:subs:${recordId}`, connectionId)
+      pipeline.srem(`rt:conn:subs:records:${connectionId}`, recordId)
+      await pipeline.exec()
+    } catch {}
+    return removed
   }
 
   getSubscribers(recordId) {
     return this.recordSubscriptions.get(recordId)
+  }
+
+  async getAllSubscribers(recordId) {
+    try { return await this.redis.hgetall(`rt:rec:subs:${recordId}`) }
+    catch { return {} }
+  }
+
+  async getSubscribedRecordsForConnection(connectionId) {
+    try {
+      const recordIds = await this.redis.smembers(`rt:conn:subs:records:${connectionId}`)
+      const out = {}
+      for (const recordId of recordIds) {
+        const mode = await this.redis.hget(`rt:rec:subs:${recordId}`, connectionId)
+        if (mode !== null) out[recordId] = mode
+      }
+      return out
+    } catch { return {} }
+  }
+
+  async listAllRecordIds() {
+    const ids = new Set()
+    let cursor = "0"
+    do {
+      try {
+        const [next, keys] = await this.redis.scan(cursor, "MATCH", "rt:rec:subs:*", "COUNT", 100)
+        cursor = next
+        for (const key of keys) ids.add(key.slice("rt:rec:subs:".length))
+      } catch { break }
+    } while (cursor !== "0")
+    return [...ids]
   }
 
   async writeRecord(recordId, newValue, options) {
@@ -98,14 +142,27 @@ export class RecordSubscriptionManager {
     }
   }
 
-  cleanupConnection(connection) {
+  async cleanupConnection(connection) {
     const connectionId = connection.id
+    const seen = new Set()
     this.recordSubscriptions.forEach((subscribers, recordId) => {
       if (subscribers.has(connectionId)) {
+        seen.add(recordId)
         subscribers.delete(connectionId)
         if (subscribers.size === 0) this.recordSubscriptions.delete(recordId)
       }
     })
+    try {
+      const remote = await this.redis.smembers(`rt:conn:subs:records:${connectionId}`)
+      for (const r of remote) seen.add(r)
+    } catch {}
+    if (seen.size === 0) return
+    try {
+      const pipeline = this.redis.pipeline()
+      for (const recordId of seen) pipeline.hdel(`rt:rec:subs:${recordId}`, connectionId)
+      pipeline.del(`rt:conn:subs:records:${connectionId}`)
+      await pipeline.exec()
+    } catch {}
   }
 
   async publishRecordDeletion(recordId, version) {

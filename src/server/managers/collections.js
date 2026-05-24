@@ -38,19 +38,72 @@ export class CollectionManager {
     const ids = records.map((record) => record.id)
     const version = 1
     this.collectionSubscriptions.get(collectionId).set(connectionId, { version })
-    await this.redis.set(`rt:collection:${collectionId}:${connectionId}`, JSON.stringify(ids))
+    try {
+      const pipeline = this.redis.pipeline()
+      pipeline.set(`rt:collection:${collectionId}:${connectionId}`, JSON.stringify(ids))
+      pipeline.hset(`rt:coll:subs:${collectionId}`, connectionId, JSON.stringify({ version }))
+      pipeline.sadd(`rt:conn:subs:collections:${connectionId}`, collectionId)
+      await pipeline.exec()
+    } catch {}
     return { ids, records, version }
   }
 
   async removeSubscription(collectionId, connectionId) {
+    let removed = false
     const collectionSubs = this.collectionSubscriptions.get(collectionId)
     if (collectionSubs?.has(connectionId)) {
       collectionSubs.delete(connectionId)
       if (collectionSubs.size === 0) this.collectionSubscriptions.delete(collectionId)
-      await this.redis.del(`rt:collection:${collectionId}:${connectionId}`)
-      return true
+      removed = true
     }
-    return false
+    try {
+      const pipeline = this.redis.pipeline()
+      pipeline.del(`rt:collection:${collectionId}:${connectionId}`)
+      pipeline.hdel(`rt:coll:subs:${collectionId}`, connectionId)
+      pipeline.srem(`rt:conn:subs:collections:${connectionId}`, collectionId)
+      await pipeline.exec()
+    } catch {}
+    return removed
+  }
+
+  async getAllSubscribers(collectionId) {
+    try {
+      const raw = await this.redis.hgetall(`rt:coll:subs:${collectionId}`)
+      const out = {}
+      for (const [connId, val] of Object.entries(raw)) {
+        try { out[connId] = JSON.parse(val) } catch { out[connId] = { version: 1 } }
+      }
+      return out
+    } catch {
+      return {}
+    }
+  }
+
+  async getSubscribedCollectionsForConnection(connectionId) {
+    try {
+      const collIds = await this.redis.smembers(`rt:conn:subs:collections:${connectionId}`)
+      const out = {}
+      for (const collId of collIds) {
+        const raw = await this.redis.hget(`rt:coll:subs:${collId}`, connectionId)
+        if (raw !== null) {
+          try { out[collId] = JSON.parse(raw) } catch { out[collId] = { version: 1 } }
+        }
+      }
+      return out
+    } catch { return {} }
+  }
+
+  async listAllCollectionIds() {
+    const ids = new Set()
+    let cursor = "0"
+    do {
+      try {
+        const [next, keys] = await this.redis.scan(cursor, "MATCH", "rt:coll:subs:*", "COUNT", 100)
+        cursor = next
+        for (const key of keys) ids.add(key.slice("rt:coll:subs:".length))
+      } catch { break }
+    } while (cursor !== "0")
+    return [...ids]
   }
 
   async publishRecordChange(recordId) {
@@ -63,18 +116,28 @@ export class CollectionManager {
 
   async cleanupConnection(connection) {
     const connectionId = connection.id
-    const cleanupPromises = []
+    const seen = new Set()
     this.collectionSubscriptions.forEach((subscribers, collectionId) => {
-      if (!subscribers.has(connectionId)) return
-      subscribers.delete(connectionId)
-      if (subscribers.size === 0) this.collectionSubscriptions.delete(collectionId)
-      cleanupPromises.push(
-        this.redis.del(`rt:collection:${collectionId}:${connectionId}`).then(() => {}).catch((err) => {
-          this.emitError(new Error(`Failed to clean up collection subscription for "${collectionId}": ${err}`))
-        })
-      )
+      if (subscribers.has(connectionId)) {
+        seen.add(collectionId)
+        subscribers.delete(connectionId)
+        if (subscribers.size === 0) this.collectionSubscriptions.delete(collectionId)
+      }
     })
-    await Promise.all(cleanupPromises)
+    try {
+      const remote = await this.redis.smembers(`rt:conn:subs:collections:${connectionId}`)
+      for (const c of remote) seen.add(c)
+    } catch {}
+    if (seen.size === 0) return
+    try {
+      const pipeline = this.redis.pipeline()
+      for (const collectionId of seen) {
+        pipeline.del(`rt:collection:${collectionId}:${connectionId}`)
+        pipeline.hdel(`rt:coll:subs:${collectionId}`, connectionId)
+      }
+      pipeline.del(`rt:conn:subs:collections:${connectionId}`)
+      await pipeline.exec()
+    } catch {}
   }
 
   async listRecordsMatching(pattern, options) {

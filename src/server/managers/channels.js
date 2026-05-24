@@ -43,26 +43,62 @@ export class ChannelManager {
     await this.pubClient.publish(channel, serialized)
   }
 
-  addSubscription(channel, connection) {
+  async addSubscription(channel, connection) {
     if (!this.channelSubscriptions[channel]) {
       this.channelSubscriptions[channel] = new Set()
     }
     this.channelSubscriptions[channel].add(connection)
+    try {
+      const pipeline = this.redis.pipeline()
+      pipeline.sadd(`rt:ch:subs:${channel}`, connection.id)
+      pipeline.sadd(`rt:conn:subs:channels:${connection.id}`, channel)
+      await pipeline.exec()
+    } catch {}
   }
 
-  removeSubscription(channel, connection) {
+  async removeSubscription(channel, connection) {
+    let removed = false
     if (this.channelSubscriptions[channel]) {
       this.channelSubscriptions[channel].delete(connection)
       if (this.channelSubscriptions[channel].size === 0) {
         delete this.channelSubscriptions[channel]
       }
-      return true
+      removed = true
     }
-    return false
+    try {
+      const pipeline = this.redis.pipeline()
+      pipeline.srem(`rt:ch:subs:${channel}`, connection.id)
+      pipeline.srem(`rt:conn:subs:channels:${connection.id}`, channel)
+      await pipeline.exec()
+    } catch {}
+    return removed
   }
 
   getSubscribers(channel) {
     return this.channelSubscriptions[channel]
+  }
+
+  async getAllSubscriberIds(channel) {
+    try { return await this.redis.smembers(`rt:ch:subs:${channel}`) }
+    catch { return [] }
+  }
+
+  async getSubscribedChannelsForConnection(connectionId) {
+    try { return await this.redis.smembers(`rt:conn:subs:channels:${connectionId}`) }
+    catch { return [] }
+  }
+
+  async listAllChannels() {
+    const channels = new Set()
+    let cursor = "0"
+    do {
+      try {
+        const [next, keys] = await this.redis.scan(cursor, "MATCH", "rt:ch:subs:*", "COUNT", 100)
+        cursor = next
+        for (const key of keys) channels.add(key.slice("rt:ch:subs:".length))
+      } catch { break }
+    } while (cursor !== "0")
+    return [...channels]
   }
 
   async subscribeToRedisChannel(channel) {
@@ -102,10 +138,30 @@ export class ChannelManager {
     return this.persistenceManager.getMessages(channel, since, limit)
   }
 
-  cleanupConnection(connection) {
+  async cleanupConnection(connection) {
+    const seen = new Set()
     for (const channel in this.channelSubscriptions) {
-      this.removeSubscription(channel, connection)
+      if (this.channelSubscriptions[channel].has(connection)) seen.add(channel)
     }
+    try {
+      const remote = await this.redis.smembers(`rt:conn:subs:channels:${connection.id}`)
+      for (const c of remote) seen.add(c)
+    } catch {}
+    for (const channel of seen) {
+      if (this.channelSubscriptions[channel]) {
+        this.channelSubscriptions[channel].delete(connection)
+        if (this.channelSubscriptions[channel].size === 0) {
+          delete this.channelSubscriptions[channel]
+        }
+      }
+    }
+    if (seen.size === 0) return
+    try {
+      const pipeline = this.redis.pipeline()
+      for (const channel of seen) pipeline.srem(`rt:ch:subs:${channel}`, connection.id)
+      pipeline.del(`rt:conn:subs:channels:${connection.id}`)
+      await pipeline.exec()
+    } catch {}
   }
 
   async cleanupAllSubscriptions() {

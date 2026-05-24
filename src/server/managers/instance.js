@@ -104,7 +104,15 @@ export class InstanceManager {
   async _cleanupConnection(connectionId) {
     try {
       const roomsKey = `rt:connection:${connectionId}:rooms`
-      const rooms = await this.redis.smembers(roomsKey)
+      const channelsKey = `rt:conn:subs:channels:${connectionId}`
+      const recordsKey = `rt:conn:subs:records:${connectionId}`
+      const collectionsKey = `rt:conn:subs:collections:${connectionId}`
+      const [rooms, channels, records, collections] = await Promise.all([
+        this.redis.smembers(roomsKey),
+        this.redis.smembers(channelsKey),
+        this.redis.smembers(recordsKey),
+        this.redis.smembers(collectionsKey),
+      ])
       const pipeline = this.redis.pipeline()
       for (const room of rooms) {
         pipeline.srem(`rt:room:${room}`, connectionId)
@@ -112,7 +120,17 @@ export class InstanceManager {
         pipeline.del(`rt:presence:room:${room}:conn:${connectionId}`)
         pipeline.del(`rt:presence:state:${room}:conn:${connectionId}`)
       }
-      pipeline.del(roomsKey)
+      for (const channel of channels) {
+        pipeline.srem(`rt:ch:subs:${channel}`, connectionId)
+      }
+      for (const recordId of records) {
+        pipeline.hdel(`rt:rec:subs:${recordId}`, connectionId)
+      }
+      for (const collectionId of collections) {
+        pipeline.hdel(`rt:coll:subs:${collectionId}`, connectionId)
+        pipeline.del(`rt:collection:${collectionId}:${connectionId}`)
+      }
+      pipeline.del(roomsKey, channelsKey, recordsKey, collectionsKey)
       pipeline.hdel("rt:connections", connectionId)
       pipeline.hdel("rt:connection-meta", connectionId)
       await this._deleteMatchingKeys(`rt:collection:*:${connectionId}`)
