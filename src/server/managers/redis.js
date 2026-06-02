@@ -22,7 +22,11 @@ export class RedisManager {
     this._redis.on("connect", () => { if (this._onRedisConnect) this._onRedisConnect() })
     this._redis.on("close", () => { if (!this._isShuttingDown && this._onRedisDisconnect) this._onRedisDisconnect() })
     this._pubClient = this._redis.duplicate()
-    this._subClient = this._redis.duplicate()
+    // a subscriber-mode connection can't answer INFO, so skip the reconnect
+    // ready check that would otherwise reject with "Connection in subscriber mode"
+    this._subClient = this._redis.duplicate({ enableReadyCheck: false })
+    this._pubClient.on("error", (err) => onError(new Error(`Redis pub client error: ${err}`)))
+    this._subClient.on("error", (err) => onError(new Error(`Redis sub client error: ${err}`)))
   }
 
   get redis() {

@@ -61,6 +61,41 @@ describe("multi-instance", () => {
     expect(received[0].msg).toBe("hello from server1")
   })
 
+  test("subscriber connection survives a reconnect without a subscriber-mode error", async () => {
+    await server1.listen(0)
+
+    const rejections = []
+    const onRejection = (err) => rejections.push(err)
+    process.on("unhandledRejection", onRejection)
+
+    const errors = []
+    server1.onError((err) => errors.push(err))
+
+    try {
+      const subClient = server1.redisManager.subClient
+
+      // the ready check sends INFO on reconnect, which a subscriber-mode
+      // connection rejects - it must be disabled on the sub client
+      expect(subClient.options.enableReadyCheck).toBe(false)
+
+      // force the subscriber connection to drop and reconnect, which runs
+      // ioredis's ready check (INFO) - illegal on a subscriber-mode connection
+      subClient.disconnect(true)
+
+      // wait for the reconnect to actually complete so the ready check runs
+      const deadline = Date.now() + 8000
+      while (subClient.status !== "ready" && Date.now() < deadline) await wait(50)
+
+      const subscriberModeHits = [...rejections, ...errors].filter((e) =>
+        String(e?.message ?? e).includes("subscriber mode")
+      )
+      expect(subscriberModeHits).toEqual([])
+      expect(subClient.status).toBe("ready")
+    } finally {
+      process.off("unhandledRejection", onRejection)
+    }
+  })
+
   test("record updates propagate across instances", async () => {
     server1.exposeRecord(/^shared:/)
     server2.exposeRecord(/^shared:/)
