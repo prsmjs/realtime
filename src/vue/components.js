@@ -47,8 +47,8 @@ export const RealtimeRecord = defineComponent({
   },
 })
 
-export const RealtimeConnection = defineComponent({
-  name: 'RealtimeConnection',
+export const RealtimeStatus = defineComponent({
+  name: 'RealtimeStatus',
   props: {
     grace: { type: Number, default: 0 },
     client: { type: Object, default: null },

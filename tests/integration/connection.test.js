@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'eventemitter3'
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, nextTick } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { Status } from '../../src/shared/index.js'
-import { useConnection, useConnectionMetadata } from '../../src/vue/index.js'
+import { useConnection, useConnectionMetadata, RealtimeStatus } from '../../src/vue/index.js'
 
 function fakeClient(status = Status.OFFLINE) {
   const client = new EventEmitter()
@@ -188,5 +188,61 @@ describe('useConnectionMetadata', () => {
     expect(c.setConnectionMetadata).toHaveBeenCalledWith({ theme: 'dark' }, undefined)
 
     wrapper.unmount()
+  })
+})
+
+describe('RealtimeStatus', () => {
+  function mountStatus(client, grace = 0) {
+    const Comp = defineComponent({
+      setup() {
+        return () => h(RealtimeStatus, { client, grace }, {
+          online: () => h('div', { 'data-slot': 'online' }),
+          reconnecting: () => h('div', { 'data-slot': 'reconnecting' }),
+          offline: () => h('div', { 'data-slot': 'offline' }),
+        })
+      },
+    })
+    return mount(Comp)
+  }
+
+  it('renders the online slot while stable and swaps slots as state changes', async () => {
+    const c = fakeClient(Status.ONLINE)
+    const wrapper = mountStatus(c, 0)
+    await nextTick()
+    expect(wrapper.find('[data-slot="online"]').exists()).toBe(true)
+
+    c.status = Status.RECONNECTING
+    c.emit('disconnect')
+    await nextTick()
+    expect(wrapper.find('[data-slot="reconnecting"]').exists()).toBe(true)
+
+    c.status = Status.OFFLINE
+    c.emit('reconnectfailed')
+    await nextTick()
+    expect(wrapper.find('[data-slot="offline"]').exists()).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('keeps the online slot mounted through a drop within the grace window', () => {
+    vi.useFakeTimers()
+    try {
+      const c = fakeClient(Status.ONLINE)
+      const wrapper = mountStatus(c, 500)
+
+      c.status = Status.RECONNECTING
+      c.emit('disconnect')
+      vi.advanceTimersByTime(200)
+      expect(wrapper.find('[data-slot="online"]').exists()).toBe(true)
+
+      c.status = Status.ONLINE
+      c.emit('reconnect')
+      vi.advanceTimersByTime(1000)
+      expect(wrapper.find('[data-slot="online"]').exists()).toBe(true)
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

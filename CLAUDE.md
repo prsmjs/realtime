@@ -45,7 +45,7 @@ redis must be running on localhost:6379 for tests.
 - MessageStream is per-server instance, not a singleton
 - connection IDs are crypto.randomUUID()
 - writeChannel auto-stringifies non-string values
-- the vue layer observes the client, it never drives the connection. useConnection/RealtimeConnection only read client.status and connection events - the client connects and reconnects on its own. do not add connect/reconnect calls to the vue layer
+- the vue layer observes the client, it never drives the connection. useConnection/RealtimeStatus only read client.status and connection events - the client connects and reconnects on its own. do not add connect/reconnect calls to the vue layer. the component is named RealtimeStatus (not RealtimeConnection) precisely so nobody mistakes it for the thing that opens the connection
 - useConnection has a `grace` window (ms, default 0): isStable stays true for that long after a drop so gated UI doesn't unmount on a brief blip. the window opens from the first drop and a reconnect inside it cancels the timer. grace logic is timer-based and tested deterministically with fake timers + a fake client (tests/integration/connection.test.js)
 - useConnectionMetadata treats the local ref as source of truth: set() writes through and the value is re-pushed on reconnect, since a reconnect gets a fresh server-side connection
 - vue layer tests: connection.test.js is pure unit (fake client, no infra), vue.test.js is live client-server (needs redis)
