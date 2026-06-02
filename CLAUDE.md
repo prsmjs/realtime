@@ -10,9 +10,12 @@ src/
   shared/         - internal shared utilities (CodeError, Logger, Status, etc)
   server/         - RealtimeServer, managers, connection, context
   client/         - RealtimeClient, connection, reconnection, subscription modules
+  vue/            - optional Vue layer (composables + renderless components), exported via /vue subpath
   adapters/       - persistence adapters (sqlite, postgres) via subpath exports
 tests/            - vitest integration tests (requires redis running)
 ```
+
+the vue layer wraps the imperative client. one composable per subscription primitive (useRoom, useRecord, useChannel, useCollection, usePresence) plus useConnection and useConnectionMetadata, each with an optional renderless component. they subscribe on mount and tear down on unmount.
 
 ## subpath exports
 
@@ -42,6 +45,10 @@ redis must be running on localhost:6379 for tests.
 - MessageStream is per-server instance, not a singleton
 - connection IDs are crypto.randomUUID()
 - writeChannel auto-stringifies non-string values
+- the vue layer observes the client, it never drives the connection. useConnection/RealtimeConnection only read client.status and connection events - the client connects and reconnects on its own. do not add connect/reconnect calls to the vue layer
+- useConnection has a `grace` window (ms, default 0): isStable stays true for that long after a drop so gated UI doesn't unmount on a brief blip. the window opens from the first drop and a reconnect inside it cancels the timer. grace logic is timer-based and tested deterministically with fake timers + a fake client (tests/integration/connection.test.js)
+- useConnectionMetadata treats the local ref as source of truth: set() writes through and the value is re-pushed on reconnect, since a reconnect gets a fresh server-side connection
+- vue layer tests: connection.test.js is pure unit (fake client, no infra), vue.test.js is live client-server (needs redis)
 
 ## testing
 

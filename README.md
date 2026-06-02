@@ -165,6 +165,42 @@ For the cases where you want the side effect to live in the template:
 <RealtimePresence room="lobby" :state="{ status, cursor }" />
 ```
 
+### Connection state
+
+`useConnection` exposes the client's connection as reactive state, and `RealtimeConnection` is its renderless wrapper. These observe an existing client - they do not open or manage the connection. The `RealtimeClient` connects on its own (and reconnects on its own); you still create and connect it as shown in [Setup](#setup). Use these only when you want to react to connection state in the UI.
+
+```vue
+<script setup>
+import { useConnection, useConnectionMetadata } from '@prsm/realtime/vue'
+
+const { status, isOnline, isReconnecting, latency, hasConnected, isStable } = useConnection()
+
+// local source of truth for this connection's metadata; set() writes through
+// to the server and the value is re-pushed automatically after a reconnect
+const { metadata, set } = useConnectionMetadata({ initial: { name: 'ada' } })
+</script>
+```
+
+`status` is one of `'online'`, `'connecting'`, `'reconnecting'`, `'offline'`. `hasConnected` becomes true after the first successful connect and stays true. `isStable` tracks `isOnline` but honors a grace window: when the connection drops it stays true for `grace` milliseconds (default `0`), and a reconnect inside that window keeps it true so dependent UI never unmounts on a brief blip.
+
+`RealtimeConnection` gates rendering on `isStable` through named slots, with `grace` as a prop:
+
+```vue
+<RealtimeConnection :grace="2000">
+  <template #online="{ latency }">
+    <ChatRoom />
+  </template>
+  <template #reconnecting>
+    <p>reconnecting...</p>
+  </template>
+  <template #offline>
+    <p>offline</p>
+  </template>
+</RealtimeConnection>
+```
+
+Because the subscription composables queue commands while offline and replay them on reconnect, you don't need to gate them to keep subscriptions working - gate only when you genuinely want the children unmounted.
+
 `vue` is an optional peer dependency. The `/vue` subpath only loads if you import from it.
 
 ## Concepts

@@ -2,6 +2,7 @@ import { defineComponent, h, toRef, watch } from 'vue'
 import { useRoom } from './useRoom.js'
 import { usePresence } from './usePresence.js'
 import { useRecord } from './useRecord.js'
+import { useConnection } from './useConnection.js'
 import { injectRealtime } from './provide.js'
 
 export const RealtimeRoom = defineComponent({
@@ -43,5 +44,25 @@ export const RealtimeRecord = defineComponent({
     const idRef = toRef(props, 'id')
     const record = useRecord(idRef, { client: props.client, mode: props.mode })
     return () => slots.default?.(record) ?? null
+  },
+})
+
+export const RealtimeConnection = defineComponent({
+  name: 'RealtimeConnection',
+  props: {
+    grace: { type: Number, default: 0 },
+    client: { type: Object, default: null },
+  },
+  setup(props, { slots }) {
+    const graceRef = toRef(props, 'grace')
+    const conn = useConnection({ client: props.client, grace: graceRef })
+    return () => {
+      const slot = conn.isStable.value
+        ? slots.online
+        : conn.isReconnecting.value
+          ? slots.reconnecting
+          : slots.offline
+      return (slot ?? slots.default)?.(conn) ?? null
+    }
   },
 })

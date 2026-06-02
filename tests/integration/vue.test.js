@@ -12,6 +12,8 @@ import {
   useRecord,
   useChannel,
   useCollection,
+  useConnection,
+  useConnectionMetadata,
   RealtimeRoom,
   RealtimePresence,
   RealtimeRecord,
@@ -317,6 +319,82 @@ describe('renderless components', () => {
     wrapper.unmount()
     await wait(150)
     expect(server.recordSubscriptionManager.recordSubscriptions.get('d:1')?.size ?? 0).toBe(0)
+  })
+})
+
+describe('useConnection (integration)', () => {
+  it('reflects online status after connect and exposes hasConnected', async () => {
+    await bootServer()
+    await bootClient()
+
+    let api
+    const Comp = defineComponent({
+      setup() {
+        api = useConnection()
+        return () => h('div', api.status.value)
+      },
+    })
+
+    const wrapper = mountWithClient(Comp)
+    await wait(100)
+
+    expect(api.status.value).toBe('online')
+    expect(api.isOnline.value).toBe(true)
+    expect(api.hasConnected.value).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('drops to offline when the client closes', async () => {
+    await bootServer()
+    await bootClient()
+
+    let api
+    const Comp = defineComponent({
+      setup() {
+        api = useConnection({ grace: 0 })
+        return () => h('div')
+      },
+    })
+
+    const wrapper = mountWithClient(Comp)
+    await wait(100)
+    expect(api.isStable.value).toBe(true)
+
+    await client.close()
+    await wait(100)
+
+    expect(api.isOnline.value).toBe(false)
+    expect(api.isStable.value).toBe(false)
+
+    wrapper.unmount()
+  })
+})
+
+describe('useConnectionMetadata (integration)', () => {
+  it('writes through to the server and reads back', async () => {
+    await bootServer()
+    await bootClient()
+
+    let api
+    const Comp = defineComponent({
+      setup() {
+        api = useConnectionMetadata()
+        return () => h('div')
+      },
+    })
+
+    const wrapper = mountWithClient(Comp)
+    await wait(100)
+
+    await api.set({ name: 'ada', role: 'admin' })
+    await wait(100)
+
+    const fresh = await api.refresh()
+    expect(fresh).toEqual({ name: 'ada', role: 'admin' })
+    expect(api.metadata.value).toEqual({ name: 'ada', role: 'admin' })
+
+    wrapper.unmount()
   })
 })
 
