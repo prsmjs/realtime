@@ -8,19 +8,29 @@ import { createCollectionSubscriptions } from "./subscriptions/collections.js"
 import { createRoomSubscriptions } from "./subscriptions/rooms.js"
 
 /**
+ * Configuration for a `RealtimeClient`. Every field is optional; sensible defaults are applied.
+ *
  * @typedef {Object} RealtimeClientOptions
- * @property {number} [pingTimeout] - ms before a ping is considered missed (default 30000)
- * @property {number} [maxMissedPings] - missed pings before reconnect (default 1)
- * @property {boolean} [shouldReconnect] - auto-reconnect on disconnect (default true)
- * @property {number} [reconnectInterval] - ms between reconnect attempts (default 2000)
- * @property {number} [maxReconnectAttempts] - max reconnect attempts (default Infinity)
- * @property {number} [logLevel] - log level from LogLevel enum
+ * @property {number} [pingTimeout] - Milliseconds to wait for a server ping before counting one as missed; also the idle window the browser activity watchdog uses before probing the connection (default 30000).
+ * @property {number} [maxMissedPings] - Number of consecutive missed pings tolerated before the client treats the connection as dead and reconnects (default 1).
+ * @property {boolean} [shouldReconnect] - Whether the client automatically reconnects after an unexpected disconnect or missed pings. When false the connection stays offline until you call `connect()` again (default true).
+ * @property {number} [reconnectInterval] - Milliseconds to wait between reconnect attempts (default 2000).
+ * @property {number} [maxReconnectAttempts] - Maximum number of reconnect attempts before giving up and emitting `reconnectfailed`. Defaults to no limit (default Infinity).
+ * @property {number} [logLevel] - Verbosity of the client logger, taken from the `LogLevel` enum (NONE 0, ERROR 1, WARN 2, INFO 3, DEBUG 4). Configuring the client applies this level process-wide (default LogLevel.ERROR).
  */
 
+/**
+ * WebSocket client for a `@prsm/realtime` server. Manages a single connection and exposes
+ * rooms, presence, pub/sub channels, versioned records, collections, and structured commands.
+ * Connects and reconnects on its own, queues commands while offline, and re-subscribes everything
+ * after a reconnect. Extends `EventEmitter`, so you can listen for lifecycle events with `on(...)`:
+ * `connect`, `reconnect`, `disconnect`, `close`, `error`, `ping`, `latency`, `reconnectfailed`,
+ * `republish`, and `message` (every inbound frame).
+ */
 export class RealtimeClient extends EventEmitter {
   /**
-   * @param {string} url - websocket server URL
-   * @param {RealtimeClientOptions} [opts]
+   * @param {string} url - WebSocket server URL to connect to, for example `ws://localhost:3000` or `wss://api.example.com`. Append query parameters such as an auth token here when the server authenticates connections from the URL.
+   * @param {RealtimeClientOptions} [opts] - Connection and reconnection settings. See `RealtimeClientOptions`.
    */
   constructor(url, opts = {}) {
     super()
@@ -61,110 +71,153 @@ export class RealtimeClient extends EventEmitter {
     this._setupVisibilityHandling()
   }
 
-  /** @returns {string} current connection status */
+  /** @returns {string} Current connection status, one of `'online'`, `'connecting'`, `'reconnecting'`, or `'offline'`. */
   get status() { return this._status }
-  /** @returns {string|undefined} the server-assigned connection id */
+  /** @returns {string|undefined} The server-assigned connection id, or undefined before the first connect completes. A fresh id is assigned after each reconnect. */
   get connectionId() { return this.connection.connectionId }
 
   /**
-   * @param {string} recordId
-   * @param {(update: {recordId: string, full?: any, patch?: import('fast-json-patch').Operation[], version: number, deleted?: boolean}) => void} callback
-   * @param {{mode?: 'full' | 'patch'}} [options]
-   * @returns {Promise<{success: boolean, record: any, version: number}>}
+   * Subscribe to a versioned record and receive updates as they happen. The callback fires once
+   * immediately with the current value, then on every server-side change. In `patch` mode a desync
+   * (a version gap) triggers an automatic resubscribe so you never miss state.
+   *
+   * @param {string} recordId - Identifier of the record to subscribe to. The server must expose a matching record.
+   * @param {(update: {recordId: string, full?: any, patch?: import('fast-json-patch').Operation[], version: number, deleted?: boolean}) => void} callback - Invoked with each update. `full` carries the whole document (always set on the initial call and in `full` mode); `patch` carries JSON Patch operations in `patch` mode; `deleted` is true when the record was removed; `version` is the monotonically increasing record version.
+   * @param {{mode?: 'full' | 'patch'}} [options] - `mode` selects whether updates ship the whole document (`full`) or JSON Patches (`patch`) (default `'full'`).
+   * @returns {Promise<{success: boolean, record: any, version: number}>} Resolves with the subscribe result: whether it succeeded, the current record value, and its version.
    */
   subscribeRecord(recordId, callback, options) { return this._records.subscribe(recordId, callback, options) }
   /**
-   * @param {string} recordId
-   * @returns {Promise<boolean>}
+   * Stop receiving updates for a record.
+   *
+   * @param {string} recordId - Identifier of the record to unsubscribe from.
+   * @returns {Promise<boolean>} Resolves true when the server acknowledged the unsubscribe.
    */
   unsubscribeRecord(recordId) { return this._records.unsubscribe(recordId) }
   /**
-   * @param {string} recordId
-   * @param {any} newValue
-   * @param {Object} [options]
-   * @returns {Promise<boolean>}
+   * Write a new value to a record. The server must expose the record as writable. Subscribers
+   * receive the change according to their chosen mode.
+   *
+   * @param {string} recordId - Identifier of the record to write.
+   * @param {any} newValue - The new record value.
+   * @param {Object} [options] - Server-defined write options forwarded as-is.
+   * @returns {Promise<boolean>} Resolves true when the write was accepted.
    */
   writeRecord(recordId, newValue, options) { return this._records.write(recordId, newValue, options) }
 
   /**
-   * @param {string} channel
-   * @param {(message: any) => void} callback
-   * @param {{historyLimit?: number, since?: string}} [options]
-   * @returns {Promise<{success: boolean, history: any[]}>}
+   * Subscribe to a pub/sub channel. The callback fires for each message the server publishes; any
+   * backlog requested via `historyLimit` or `since` is delivered first, oldest to newest.
+   *
+   * @param {string} channel - Name of the channel to subscribe to. The server must expose a matching channel.
+   * @param {(message: any) => void} callback - Invoked with each published message, and with each backfilled history message.
+   * @param {{historyLimit?: number, since?: string}} [options] - `historyLimit` caps how many past messages to replay on subscribe; `since` replays messages after the given message id or timestamp.
+   * @returns {Promise<{success: boolean, history: any[]}>} Resolves with whether the subscribe succeeded and the history that was replayed.
    */
   subscribeChannel(channel, callback, options) { return this._channels.subscribe(channel, callback, options) }
   /**
-   * @param {string} channel
-   * @returns {Promise<any>}
+   * Stop receiving messages from a channel.
+   *
+   * @param {string} channel - Name of the channel to unsubscribe from.
+   * @returns {Promise<any>} Resolves with the server acknowledgement.
    */
   unsubscribeChannel(channel) { return this._channels.unsubscribe(channel) }
   /**
-   * @param {string} channel
-   * @param {{limit?: number, since?: string}} [options]
-   * @returns {Promise<{success: boolean, history: any[]}>}
+   * Fetch past messages for a channel without subscribing.
+   *
+   * @param {string} channel - Name of the channel to read history for.
+   * @param {{limit?: number, since?: string}} [options] - `limit` caps how many messages to return; `since` returns messages after the given message id or timestamp.
+   * @returns {Promise<{success: boolean, history: any[]}>} Resolves with whether the request succeeded and the matching messages, oldest to newest.
    */
   getChannelHistory(channel, options) { return this._channels.getHistory(channel, options) }
 
   /**
-   * @param {string} roomName
-   * @param {(update: {roomName: string, present: string[], states: Object<string, any>, joined?: string, left?: string}) => void} callback
-   * @returns {Promise<{success: boolean, present: string[], states?: Object<string, any>}>}
+   * Subscribe to presence for a room and receive other members' state. Prefer `joinRoom(name, cb)`
+   * when you also need room membership; this method only subscribes to presence updates.
+   *
+   * @param {string} roomName - Name of the room whose presence to track. The server must track presence for it.
+   * @param {(update: {roomName: string, present: string[], states: Object<string, any>, joined?: string, left?: string}) => void} callback - Invoked with each presence change. The first call carries the full snapshot (`present` connection ids and their `states`); later calls carry incremental changes, including `joined`/`left` connection ids.
+   * @returns {Promise<{success: boolean, present: string[], states?: Object<string, any>}>} Resolves with the initial presence snapshot.
    */
   subscribePresence(roomName, callback) { return this._presence.subscribe(roomName, callback) }
   /**
-   * @param {string} roomName
-   * @returns {Promise<boolean>}
+   * Stop receiving presence updates for a room.
+   *
+   * @param {string} roomName - Name of the room to unsubscribe presence from.
+   * @returns {Promise<boolean>} Resolves true when the server acknowledged the unsubscribe.
    */
   unsubscribePresence(roomName) { return this._presence.unsubscribe(roomName) }
   /**
-   * @param {string} roomName
-   * @param {{state: any, expireAfter?: number, silent?: boolean}} options
-   * @returns {Promise<any>}
+   * Publish this connection's presence state into a room. Other members subscribed to the room's
+   * presence receive the change.
+   *
+   * @param {string} roomName - Name of the room to publish state into. You typically join the room first.
+   * @param {{state: any, expireAfter?: number, silent?: boolean}} options - `state` is the presence payload to broadcast; `expireAfter` is a time-to-live in milliseconds after which the state is dropped automatically; `silent` updates the stored state without broadcasting an update to other members.
+   * @returns {Promise<any>} Resolves with the server acknowledgement.
    */
   publishPresenceState(roomName, options) { return this._presence.publishState(roomName, options) }
   /**
-   * @param {string} roomName
-   * @returns {Promise<any>}
+   * Clear this connection's presence state in a room.
+   *
+   * @param {string} roomName - Name of the room to clear state in.
+   * @returns {Promise<any>} Resolves with the server acknowledgement.
    */
   clearPresenceState(roomName) { return this._presence.clearState(roomName) }
   /**
-   * @param {string} roomName
-   * @returns {Promise<boolean>}
+   * Re-fetch the full presence snapshot for a room and feed it to the subscription handler. Useful
+   * to reconcile state after a network blip. Does nothing if you are not subscribed to the room.
+   *
+   * @param {string} roomName - Name of the room to refresh.
+   * @returns {Promise<boolean>} Resolves true when the snapshot was fetched and applied.
    */
   forcePresenceUpdate(roomName) { return this._presence.forceUpdate(roomName) }
 
   /**
-   * @param {string} collectionId
-   * @param {{onDiff?: (diff: {added: Array<{id: string, record: any}>, removed: Array<{id: string, record: any}>, changed: Array<{id: string, record: any}>, version: number}) => void}} [options]
-   * @returns {Promise<{success: boolean, ids: string[], records: any[], version: number}>}
+   * Subscribe to a collection, an index over records resolved per-connection at subscribe time. The
+   * `onDiff` handler fires once immediately with the initial members, then on every membership change.
+   *
+   * @param {string} collectionId - Identifier of the collection to subscribe to. The server must expose a matching collection.
+   * @param {{onDiff?: (diff: {added: Array<{id: string, record: any}>, removed: Array<{id: string, record: any}>, changed: Array<{id: string, record: any}>, version: number}) => void}} [options] - `onDiff` receives membership changes. The initial call reports every current member under `added`; later calls report incremental `added`, `removed`, and `changed` records along with the collection `version`.
+   * @returns {Promise<{success: boolean, ids: string[], records: any[], version: number}>} Resolves with the initial members and collection version.
    */
   subscribeCollection(collectionId, options) { return this._collections.subscribe(collectionId, options) }
   /**
-   * @param {string} collectionId
-   * @returns {Promise<boolean>}
+   * Stop receiving diffs for a collection.
+   *
+   * @param {string} collectionId - Identifier of the collection to unsubscribe from.
+   * @returns {Promise<boolean>} Resolves true when the server acknowledged the unsubscribe.
    */
   unsubscribeCollection(collectionId) { return this._collections.unsubscribe(collectionId) }
 
   /**
-   * @param {string} roomName
-   * @param {(update: {roomName: string, present: string[], states: Object<string, any>, joined?: string, left?: string}) => void} [onPresenceUpdate]
-   * @returns {Promise<{success: boolean, present: string[]}>}
+   * Join a room, scoping membership and broadcasts. Pass `onPresenceUpdate` to also subscribe to
+   * the room's presence in one call; omit it to join without tracking presence.
+   *
+   * @param {string} roomName - Name of the room to join.
+   * @param {(update: {roomName: string, present: string[], states: Object<string, any>, joined?: string, left?: string}) => void} [onPresenceUpdate] - Optional presence handler. When provided, this also subscribes to the room's presence; the handler receives the same updates as `subscribePresence`.
+   * @returns {Promise<{success: boolean, present: string[]}>} Resolves with whether the join succeeded and the current member connection ids.
    */
   joinRoom(roomName, onPresenceUpdate) { return this._rooms.join(roomName, onPresenceUpdate) }
   /**
-   * @param {string} roomName
-   * @returns {Promise<{success: boolean}>}
+   * Leave a room. Any presence subscription established for the room is torn down as well.
+   *
+   * @param {string} roomName - Name of the room to leave.
+   * @returns {Promise<{success: boolean}>} Resolves with whether the leave succeeded.
    */
   leaveRoom(roomName) { return this._rooms.leave(roomName) }
   /**
-   * @param {string} roomName
-   * @returns {Promise<any>}
+   * Fetch server-side metadata for a room.
+   *
+   * @param {string} roomName - Name of the room to read metadata for.
+   * @returns {Promise<any>} Resolves with the room metadata, or null on failure.
    */
   getRoomMetadata(roomName) { return this._rooms.getMetadata(roomName) }
 
   /**
-   * @param {string} [connectionId] - if omitted, returns metadata for the current connection
-   * @returns {Promise<any>}
+   * Fetch metadata stored on a connection. With no argument it returns this connection's metadata.
+   *
+   * @param {string} [connectionId] - Connection id to look up. If omitted, returns metadata for the current connection.
+   * @returns {Promise<any>} Resolves with the metadata object, or null on failure.
    */
   async getConnectionMetadata(connectionId) {
     try {
@@ -181,9 +234,12 @@ export class RealtimeClient extends EventEmitter {
   }
 
   /**
-   * @param {any} metadata
-   * @param {Object} [options]
-   * @returns {Promise<boolean>}
+   * Set metadata on the current connection. The metadata is re-applied automatically after a
+   * reconnect, since a reconnect produces a fresh server-side connection.
+   *
+   * @param {any} metadata - The metadata value to store for this connection.
+   * @param {Object} [options] - Server-defined options forwarded as-is.
+   * @returns {Promise<boolean>} Resolves true when the metadata was stored.
    */
   async setConnectionMetadata(metadata, options) {
     try {
@@ -270,7 +326,14 @@ export class RealtimeClient extends EventEmitter {
     this.reconnect()
   }
 
-  /** @returns {Promise<void>} */
+  /**
+   * Open the WebSocket connection. Resolves once the connection is online and the server has
+   * assigned a connection id. Safe to call when already online (resolves immediately) or mid-connect
+   * (waits for the in-flight attempt). Commands sent while offline trigger a connect automatically,
+   * so calling this explicitly is optional.
+   *
+   * @returns {Promise<void>} Resolves when the connection is online; rejects if the attempt errors.
+   */
   connect() {
     if (this._status === Status.ONLINE) return Promise.resolve()
 
@@ -333,7 +396,13 @@ export class RealtimeClient extends EventEmitter {
     }
   }
 
-  /** @returns {Promise<void>} */
+  /**
+   * Close the connection intentionally and stop automatic reconnection. Emits `disconnect` once the
+   * socket is closed. Use this for a deliberate teardown; for transient drops the client reconnects
+   * on its own.
+   *
+   * @returns {Promise<void>} Resolves once the connection is fully closed.
+   */
   close() {
     this._closed = true
     if (this._status === Status.OFFLINE) return Promise.resolve()
@@ -352,6 +421,14 @@ export class RealtimeClient extends EventEmitter {
     })
   }
 
+  /**
+   * Begin reconnecting after a drop. The client calls this on its own when the socket closes or
+   * pings are missed; you rarely call it directly. No-op when reconnection is disabled, a reconnect
+   * is already in progress, or the connection was closed deliberately via `close()`. Emits
+   * `reconnectfailed` once `maxReconnectAttempts` is exhausted.
+   *
+   * @returns {void}
+   */
   reconnect() {
     if (this._closed || !this.options.shouldReconnect || this.isReconnecting) return
 
@@ -405,10 +482,13 @@ export class RealtimeClient extends EventEmitter {
   }
 
   /**
-   * @param {string} command - command name
-   * @param {Object} [payload] - command payload
-   * @param {number} [expiresIn] - timeout in ms (default 30000)
-   * @returns {Promise<any>}
+   * Invoke a structured command on the server and await its response, the client side of the
+   * request/response RPC. If the client is offline it connects first, then sends the command.
+   *
+   * @param {string} command - Name of the server-exposed command to invoke.
+   * @param {Object} [payload] - Arguments passed to the command handler.
+   * @param {number} [expiresIn] - Milliseconds to wait for a response before the call rejects with a timeout (default 30000).
+   * @returns {Promise<any>} Resolves with the value returned by the command handler.
    */
   async command(command, payload, expiresIn = 30000) {
     if (this._status !== Status.ONLINE) {

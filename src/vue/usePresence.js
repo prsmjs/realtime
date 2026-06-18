@@ -1,6 +1,27 @@
 import { ref, shallowRef, onMounted, onBeforeUnmount, watch, isRef, unref } from 'vue'
 import { injectRealtime } from './provide.js'
 
+/**
+ * @typedef {Object} UsePresenceOptions
+ * @property {import('../client/index.js').RealtimeClient} [client] - Client to use instead of the provided one. Defaults to the client from `provideRealtime`.
+ * @property {boolean} [autoJoin=true] - Whether to join the room before subscribing to presence (true). Set false if the room is already joined elsewhere.
+ * @property {*} [initial=null] - Initial value for the local presence state. When non-null it is published once subscribed.
+ */
+
+/**
+ * @typedef {Object} UsePresenceReturn
+ * @property {import('vue').Ref<any>} me - Your own presence state. Writing to it (including deep mutations) publishes the new state to the room.
+ * @property {import('vue').ShallowRef<Record<string, any>>} others - Other connections' presence keyed by connection ID. Updated as peers join, change, or leave.
+ */
+
+/**
+ * Track presence in a room and publish your own state. Subscribes on mount and
+ * tears down on unmount; assigning to the returned `me` ref publishes your
+ * state. Pass a ref for `roomName` to switch rooms reactively.
+ * @param {string|import('vue').Ref<string>} roomName - The room whose presence to track, as a string or a ref for reactive switching.
+ * @param {UsePresenceOptions} [options] - Optional configuration.
+ * @returns {UsePresenceReturn} Reactive presence state.
+ */
 export function usePresence(roomName, options = {}) {
   const client = injectRealtime(options.client)
   const autoJoin = options.autoJoin !== false

@@ -1,6 +1,34 @@
 import { convertToSqlPattern } from "../server/utils/pattern-conversion.js"
 import { serverLogger } from "../shared/index.js"
 
+/**
+ * @typedef {import("./sqlite.js").ChannelMessage} ChannelMessage
+ * @typedef {import("./sqlite.js").StoredRecord} StoredRecord
+ * @typedef {import("./sqlite.js").PersistenceAdapter} PersistenceAdapter
+ */
+
+/**
+ * @typedef {Object} PostgresAdapterOptions
+ * @property {string} [connectionString] - Full Postgres connection URI (for example `postgres://user:pass@host:5432/db`). When provided it takes precedence and the discrete `host`, `port`, `database`, `user`, and `password` options are ignored.
+ * @property {string} [host="localhost"] - Database host. Used only when `connectionString` is not set.
+ * @property {number} [port=5432] - Database port. Used only when `connectionString` is not set.
+ * @property {string} [database="realtime_test"] - Database name. Used only when `connectionString` is not set.
+ * @property {string} [user="realtime"] - Database user. Used only when `connectionString` is not set.
+ * @property {string} [password="realtime_password"] - Database password. Used only when `connectionString` is not set.
+ * @property {(boolean|Object)} [ssl] - SSL configuration passed through to the `pg` pool. Used only when `connectionString` is not set.
+ * @property {number} [max=10] - Maximum number of clients in the connection pool. Applied in both connection-string and discrete-option modes.
+ */
+
+/**
+ * Creates a PostgreSQL-backed persistence adapter for `@prsm/realtime`. Pass the
+ * returned object as the server's `persistence` option to keep channel
+ * messages and record state durable across restarts. The pool is opened lazily
+ * by `initialize`, which the server calls during startup. Requires the optional
+ * `pg` peer dependency to be installed.
+ *
+ * @param {PostgresAdapterOptions} [options={}] - Adapter configuration.
+ * @returns {PersistenceAdapter} The persistence adapter the server interacts with.
+ */
 export function createPostgresAdapter(options = {}) {
   const opts = {
     host: "localhost",

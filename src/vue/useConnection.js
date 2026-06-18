@@ -9,6 +9,30 @@ const STATUS_NAME = {
   [Status.OFFLINE]: 'offline',
 }
 
+/**
+ * @typedef {Object} UseConnectionOptions
+ * @property {import('../client/index.js').RealtimeClient} [client] - Client to use instead of the provided one. Defaults to the client from `provideRealtime`.
+ * @property {number|import('vue').Ref<number>} [grace=0] - Grace window in milliseconds. After a drop, `isStable` stays true for this long so gated UI does not unmount on a brief blip. The window opens from the first drop and a reconnect inside it cancels the timer. Defaults to 0 (no grace).
+ */
+
+/**
+ * @typedef {Object} UseConnectionReturn
+ * @property {import('vue').Ref<'online'|'connecting'|'reconnecting'|'offline'>} status - The current connection status as a lowercase string.
+ * @property {import('vue').ComputedRef<boolean>} isOnline - True when the connection is online right now.
+ * @property {import('vue').ComputedRef<boolean>} isReconnecting - True while the client is attempting to reconnect.
+ * @property {import('vue').Ref<boolean>} isStable - True when online, and stays true through a drop for the grace window. Use this to gate UI that should survive brief disconnects.
+ * @property {import('vue').Ref<number|null>} latency - Last measured round-trip latency in milliseconds, or null before the first measurement.
+ * @property {import('vue').Ref<boolean>} hasConnected - True once the client has been online at least once. Stays true after later drops.
+ */
+
+/**
+ * Observe the connection's status and latency. This composable only reads
+ * client status and events; it never opens, closes, or reconnects the
+ * connection (the client does that on its own). Use `isStable` rather than
+ * `isOnline` to gate UI when you want it to survive brief disconnects.
+ * @param {UseConnectionOptions} [options] - Optional configuration.
+ * @returns {UseConnectionReturn} Reactive connection state.
+ */
 export function useConnection(options = {}) {
   const client = injectRealtime(options.client)
   const grace = options.grace ?? 0

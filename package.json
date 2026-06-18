@@ -5,17 +5,20 @@
   "type": "module",
   "license": "ISC",
   "exports": {
-    ".": "./src/index.js",
-    "./client": "./src/client/index.js",
-    "./vue": "./src/vue/index.js",
-    "./sqlite": "./src/adapters/sqlite.js",
-    "./postgres": "./src/adapters/postgres.js"
+    ".": { "types": "./types/index.d.ts", "default": "./src/index.js" },
+    "./client": { "types": "./types/client/index.d.ts", "default": "./src/client/index.js" },
+    "./vue": { "types": "./types/vue/index.d.ts", "default": "./src/vue/index.js" },
+    "./sqlite": { "types": "./types/adapters/sqlite.d.ts", "default": "./src/adapters/sqlite.js" },
+    "./postgres": { "types": "./types/adapters/postgres.d.ts", "default": "./src/adapters/postgres.js" }
   },
+  "types": "./types/index.d.ts",
   "files": [
-    "src"
+    "src",
+    "types"
   ],
   "scripts": {
-    "test": "vitest run --reporter verbose"
+    "test": "vitest run --reporter verbose",
+    "prepublishOnly": "npx tsc --declaration --allowJs --emitDeclarationOnly --skipLibCheck --target es2020 --module nodenext --moduleResolution nodenext --strict false --esModuleInterop true --outDir ./types src/index.js src/client/index.js src/vue/index.js src/adapters/sqlite.js src/adapters/postgres.js"
   },
   "engines": {
     "node": ">=20"
@@ -48,6 +51,7 @@
     "@vue/test-utils": "^2.4.10",
     "happy-dom": "^20.9.0",
     "ioredis": "^5.6.1",
+    "typescript": "^5.9.3",
     "vitest": "^3.2.4",
     "vue": "^3.5.34"
   }

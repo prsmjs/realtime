@@ -1,6 +1,49 @@
 import { convertToSqlPattern } from "../server/utils/pattern-conversion.js"
 import { serverLogger } from "../shared/index.js"
 
+/**
+ * @typedef {Object} SqliteAdapterOptions
+ * @property {string} [filename=":memory:"] - Path to the SQLite database file. Defaults to `":memory:"`, which keeps everything in memory and discards it on close, so set a real file path to persist across restarts.
+ */
+
+/**
+ * @typedef {Object} ChannelMessage
+ * @property {string} id - Unique identifier for the message, used as the cursor when paginating with `getMessages`.
+ * @property {string} channel - Name of the channel the message belongs to.
+ * @property {string} message - Serialized message payload as stored by the server.
+ * @property {string} instanceId - Identifier of the server instance that produced the message.
+ * @property {number} timestamp - Creation time in milliseconds since the Unix epoch.
+ * @property {Object} [metadata] - Arbitrary metadata object associated with the message, or `undefined` when none was stored.
+ */
+
+/**
+ * @typedef {Object} StoredRecord
+ * @property {string} recordId - Unique identifier for the record.
+ * @property {number} version - Monotonically increasing version number for optimistic concurrency.
+ * @property {string} value - Serialized record value as stored by the server.
+ * @property {number} timestamp - Last write time in milliseconds since the Unix epoch.
+ */
+
+/**
+ * @typedef {Object} PersistenceAdapter
+ * @property {() => Promise<void>} initialize - Opens the database connection and creates the required tables and indexes if they do not exist. Idempotent; safe to call more than once.
+ * @property {(messages: ChannelMessage[]) => Promise<void>} storeMessages - Inserts a batch of channel messages in a single transaction. A zero-length array is a no-op.
+ * @property {(channel: string, since?: (number|string), limit?: number) => Promise<ChannelMessage[]>} getMessages - Returns messages for a channel ordered oldest first. `since` may be a millisecond timestamp or a message `id` to page after; omit it to start from the beginning. `limit` caps the result count (default 50).
+ * @property {(records: StoredRecord[]) => Promise<void>} storeRecords - Upserts a batch of records by `recordId` in a single transaction, replacing any existing row. A zero-length array is a no-op.
+ * @property {(pattern: string) => Promise<StoredRecord[]>} getRecords - Returns records whose `recordId` matches the glob-style pattern, ordered newest first. The pattern is converted to a SQL LIKE pattern internally.
+ * @property {() => Promise<void>} close - Closes the database connection and resets internal state. A no-op if the adapter was never initialized.
+ */
+
+/**
+ * Creates a SQLite-backed persistence adapter for `@prsm/realtime`. Pass the
+ * returned object as the server's `persistence` option to keep channel
+ * messages and record state durable across restarts. The connection is opened
+ * lazily by `initialize`, which the server calls during startup. Requires the
+ * optional `sqlite3` peer dependency to be installed.
+ *
+ * @param {SqliteAdapterOptions} [options={}] - Adapter configuration.
+ * @returns {PersistenceAdapter} The persistence adapter the server interacts with.
+ */
 export function createSqliteAdapter(options = {}) {
   const opts = { filename: ":memory:", ...options }
   let db = null

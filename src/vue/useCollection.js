@@ -1,6 +1,28 @@
 import { ref, shallowRef, onMounted, onBeforeUnmount, watch, isRef, unref } from 'vue'
 import { injectRealtime } from './provide.js'
 
+/**
+ * @typedef {Object} UseCollectionOptions
+ * @property {import('../client/index.js').RealtimeClient} [client] - Client to use instead of the provided one. Defaults to the client from `provideRealtime`.
+ */
+
+/**
+ * @typedef {Object} UseCollectionReturn
+ * @property {import('vue').ShallowRef<any[]>} items - The collection's records, kept in sync as items are added, changed, or removed.
+ * @property {import('vue').Ref<number>} version - The collection's version number, advanced by the server on each diff.
+ * @property {import('vue').Ref<boolean>} ready - True once the initial collection snapshot has loaded.
+ * @property {import('vue').Ref<Error|null>} error - The last error from subscribing, or null if none occurred.
+ */
+
+/**
+ * Subscribe to a collection and keep a live array of its records. Subscribes on
+ * mount and tears down on unmount, applying server diffs (added, changed,
+ * removed) to the local `items`. Pass a ref for `collectionId` to switch
+ * collections reactively; `items` resets on switch.
+ * @param {string|import('vue').Ref<string>} collectionId - The collection to subscribe to, as a string or a ref for reactive switching.
+ * @param {UseCollectionOptions} [options] - Optional configuration.
+ * @returns {UseCollectionReturn} Reactive collection state.
+ */
 export function useCollection(collectionId, options = {}) {
   const client = injectRealtime(options.client)
   const items = shallowRef([])

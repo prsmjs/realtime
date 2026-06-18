@@ -1,6 +1,27 @@
 import { ref, shallowRef, onMounted, onBeforeUnmount, watch, isRef, unref } from 'vue'
 import { injectRealtime } from './provide.js'
 
+/**
+ * @typedef {Object} UseRoomOptions
+ * @property {import('../client/index.js').RealtimeClient} [client] - Client to use instead of the provided one. Defaults to the client from `provideRealtime`.
+ */
+
+/**
+ * @typedef {Object} UseRoomReturn
+ * @property {import('vue').ShallowRef<string[]>} members - Connection IDs currently in the room. Replaced on every membership change.
+ * @property {import('vue').ShallowRef<Record<string, any>>} presence - Per-connection presence state keyed by connection ID, merged as updates arrive.
+ * @property {import('vue').Ref<boolean>} joined - True once the join has completed and the room is being tracked.
+ * @property {import('vue').Ref<Error|null>} error - The last error from joining the room, or null if none occurred.
+ */
+
+/**
+ * Join a room and track its membership and presence. Joins on mount and leaves
+ * on unmount. Pass a ref for `roomName` to switch rooms reactively; the old
+ * room is left and the new one joined automatically.
+ * @param {string|import('vue').Ref<string>} roomName - The room to join, as a plain string or a ref for reactive room switching.
+ * @param {UseRoomOptions} [options] - Optional configuration.
+ * @returns {UseRoomReturn} Reactive room state.
+ */
 export function useRoom(roomName, options = {}) {
   const client = injectRealtime(options.client)
   const members = shallowRef([])
