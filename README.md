@@ -70,7 +70,7 @@ await client.subscribeChannel('notifications', (message) => {
 
 await client.publishPresenceState('lobby', { state: { status: 'online' } })
 
-const { result } = await client.command('echo', { hello: 'world' })
+const { echoed } = await client.command('echo', { hello: 'world' })
 
 client.close()
 ```
