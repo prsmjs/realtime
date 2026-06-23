@@ -66,7 +66,7 @@ export function useCollection(collectionId, options = {}) {
         try { await client.unsubscribeCollection(id) } catch {}
         return
       }
-      if (Array.isArray(result?.records)) items.value = result.records
+      if (Array.isArray(result?.records)) items.value = result.records.map((e) => e.record ?? e)
       if (typeof result?.version === 'number') version.value = result.version
       ready.value = result?.success === true
     } catch (err) {
