@@ -1,15 +1,30 @@
 {
   "name": "@prsm/realtime",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Distributed WebSocket framework with Redis-backed rooms, records, presence, channels, collections, and persistence",
   "type": "module",
   "license": "ISC",
   "exports": {
-    ".": { "types": "./types/index.d.ts", "default": "./src/index.js" },
-    "./client": { "types": "./types/client/index.d.ts", "default": "./src/client/index.js" },
-    "./vue": { "types": "./types/vue/index.d.ts", "default": "./src/vue/index.js" },
-    "./sqlite": { "types": "./types/adapters/sqlite.d.ts", "default": "./src/adapters/sqlite.js" },
-    "./postgres": { "types": "./types/adapters/postgres.d.ts", "default": "./src/adapters/postgres.js" }
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./client": {
+      "types": "./types/client/index.d.ts",
+      "default": "./src/client/index.js"
+    },
+    "./vue": {
+      "types": "./types/vue/index.d.ts",
+      "default": "./src/vue/index.js"
+    },
+    "./sqlite": {
+      "types": "./types/adapters/sqlite.d.ts",
+      "default": "./src/adapters/sqlite.js"
+    },
+    "./postgres": {
+      "types": "./types/adapters/postgres.d.ts",
+      "default": "./src/adapters/postgres.js"
+    }
   },
   "types": "./types/index.d.ts",
   "files": [
