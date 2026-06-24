@@ -16,6 +16,7 @@ export class PubSubManager {
     this.collectionUpdateTimeouts = new Map()
     this.collectionMaxDelayTimeouts = new Map()
     this.pendingCollectionUpdates = new Map()
+    this.collectionProcessingChain = new Map()
     this.COLLECTION_UPDATE_DEBOUNCE_MS = 50
     this.COLLECTION_MAX_DELAY_MS = 200
   }
@@ -161,7 +162,23 @@ export class PubSubManager {
     }
   }
 
-  async _processCollectionUpdates(collectionId) {
+  // serialize per collection: the resolver can await (DB-backed guards, redis
+  // scans), so without this two overlapping runs read the same version and emit
+  // duplicate version numbers, which desyncs every subscriber
+  _processCollectionUpdates(collectionId) {
+    const tail = this.collectionProcessingChain.get(collectionId) || Promise.resolve()
+    const next = tail
+      .catch(() => {})
+      .then(() => this._runCollectionUpdate(collectionId))
+      .catch((err) => this.emitError(new Error(`Error processing collection ${collectionId}: ${err}`)))
+    this.collectionProcessingChain.set(collectionId, next)
+    next.finally(() => {
+      if (this.collectionProcessingChain.get(collectionId) === next) this.collectionProcessingChain.delete(collectionId)
+    })
+    return next
+  }
+
+  async _runCollectionUpdate(collectionId) {
     const changedRecordIds = this.pendingCollectionUpdates.get(collectionId)
     if (!changedRecordIds || changedRecordIds.size === 0) return
     const debounceTimeout = this.collectionUpdateTimeouts.get(collectionId)

@@ -49,7 +49,7 @@ export function createCollectionSubscriptions(client) {
         })
         if (options.onDiff) {
           try {
-            await options.onDiff({ added: result.records, removed: [], changed: [], version: result.version })
+            await options.onDiff({ added: result.records, removed: [], changed: [], version: result.version, reset: true })
           } catch (error) {
             clientLogger.error("error in initial collection diff callback", { collectionId, err: error })
           }

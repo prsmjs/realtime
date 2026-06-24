@@ -105,6 +105,34 @@ describe("collections", () => {
     expect(removeDiff).toBeTruthy()
   })
 
+  test("rapid adds followed by a delete still removes the item from a live subscriber", async () => {
+    server.exposeRecord(/^item:/)
+    server.exposeCollection(/^items:/, async () => server.listRecordsMatching("item:*"))
+    await server.listen(0)
+
+    clientA = new RealtimeClient(`ws://localhost:${server.port}`)
+    await clientA.connect()
+
+    const ids = new Set()
+    await clientA.subscribeCollection("items:list", {
+      onDiff: (diff) => {
+        if (diff.reset) ids.clear()
+        for (const e of diff.added || []) ids.add(e.id ?? e.record?.id)
+        for (const e of diff.removed || []) ids.delete(e.id)
+      },
+    })
+
+    for (let i = 0; i < 20; i++) await server.writeRecord(`item:${i}`, { id: `item:${i}`, n: i })
+    await wait(700)
+    expect(ids.size).toBe(20)
+
+    await server.deleteRecord("item:5")
+    await wait(700)
+
+    expect(ids.has("item:5")).toBe(false)
+    expect(ids.size).toBe(19)
+  })
+
   test("unexposed collection returns failure", async () => {
     await server.listen(0)
 

@@ -40,7 +40,9 @@ export function useCollection(collectionId, options = {}) {
       const result = await client.subscribeCollection(id, {
         onDiff: (diff) => {
           if (!diff) return
-          let next = items.value.slice()
+          // a reset snapshot (initial subscribe, desync recovery, reconnect) is
+          // authoritative: rebuild from it so removals during the gap converge
+          let next = diff.reset ? [] : items.value.slice()
           if (Array.isArray(diff.added)) {
             for (const entry of diff.added) {
               const idx = next.findIndex((x) => x.id === entry.id)
