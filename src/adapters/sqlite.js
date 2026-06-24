@@ -30,6 +30,7 @@ import { serverLogger } from "../shared/index.js"
  * @property {(messages: ChannelMessage[]) => Promise<void>} storeMessages - Inserts a batch of channel messages in a single transaction. A zero-length array is a no-op.
  * @property {(channel: string, since?: (number|string), limit?: number) => Promise<ChannelMessage[]>} getMessages - Returns messages for a channel ordered oldest first. `since` may be a millisecond timestamp or a message `id` to page after; omit it to start from the beginning. `limit` caps the result count (default 50).
  * @property {(records: StoredRecord[]) => Promise<void>} storeRecords - Upserts a batch of records by `recordId` in a single transaction, replacing any existing row. A zero-length array is a no-op.
+ * @property {(recordIds: string[]) => Promise<void>} removeRecords - Deletes the records with the given ids in a single transaction. A zero-length array is a no-op. Ids that are not present are ignored.
  * @property {(pattern: string) => Promise<StoredRecord[]>} getRecords - Returns records whose `recordId` matches the glob-style pattern, ordered newest first. The pattern is converted to a SQL LIKE pattern internally.
  * @property {() => Promise<void>} close - Closes the database connection and resets internal state. A no-op if the adapter was never initialized.
  */
@@ -175,6 +176,25 @@ export function createSqliteAdapter(options = {}) {
             for (const record of records) {
               stmt.run(record.recordId, record.version, record.value, record.timestamp)
             }
+            stmt.finalize()
+            db.run("COMMIT", (err) => {
+              if (err) { db.run("ROLLBACK"); reject(err) }
+              else resolve()
+            })
+          } catch (err) { db.run("ROLLBACK"); reject(err) }
+        })
+      })
+    },
+
+    async removeRecords(recordIds) {
+      if (!db) throw new Error("Database not initialized")
+      if (recordIds.length === 0) return
+      return new Promise((resolve, reject) => {
+        db.serialize(() => {
+          db.run("BEGIN TRANSACTION")
+          const stmt = db.prepare(`DELETE FROM records WHERE record_id = ?`)
+          try {
+            for (const recordId of recordIds) stmt.run(recordId)
             stmt.finalize()
             db.run("COMMIT", (err) => {
               if (err) { db.run("ROLLBACK"); reject(err) }

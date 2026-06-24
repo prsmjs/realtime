@@ -144,6 +144,12 @@ export function createPostgresAdapter(options = {}) {
       finally { client.release() }
     },
 
+    async removeRecords(recordIds) {
+      if (!pool) throw new Error("Database not initialized")
+      if (recordIds.length === 0) return
+      await pool.query(`DELETE FROM records WHERE record_id = ANY($1)`, [recordIds])
+    },
+
     async getRecords(pattern) {
       if (!pool) throw new Error("Database not initialized")
       const sqlPattern = convertToSqlPattern(pattern)

@@ -160,6 +160,10 @@ export class RealtimeServer {
     this.recordManager.onRecordRemoved(async ({ recordId }) => {
       try { await this.collectionManager.publishRecordChange(recordId) }
       catch (error) { this._emitError(new Error(`Failed to publish record removal for collection check: ${error}`)) }
+      if (this.persistenceManager) {
+        try { this.persistenceManager.handleRecordRemoved(recordId) }
+        catch (error) { this._emitError(new Error(`Failed to persist record removal: ${error}`)) }
+      }
     })
 
     this.pubSubManager = new PubSubManager({
@@ -506,7 +510,7 @@ export class RealtimeServer {
    * @param {Object} config - Record persistence configuration.
    * @param {ChannelPattern} config.pattern - Exact record id or RegExp matched against record ids.
    * @param {{adapter?: any, restorePattern: string}} [config.adapter] - Optional adapter override and the pattern used to restore matching records on startup.
-   * @param {{persist: (records: Array<{recordId: string, value: any, version: number}>) => Promise<void>, restore: () => Promise<Array<{recordId: string, value: any, version: number}>>}} [config.hooks] - Custom persist and restore hooks used instead of the adapter.
+   * @param {{persist: (records: Array<{recordId: string, value: any, version: number}>) => Promise<void>, restore: () => Promise<Array<{recordId: string, value: any, version: number}>>, remove?: (recordIds: string[]) => Promise<void>}} [config.hooks] - Custom persist and restore hooks used instead of the adapter. Provide `remove` to flush deletions; without it, deleted records are not removed from the custom store and will be restored on restart.
    * @param {number} [config.flushInterval] - Interval in milliseconds between flushes of buffered record writes.
    * @param {number} [config.maxBufferSize] - Maximum buffered records before an immediate flush is forced.
    * @returns {void}

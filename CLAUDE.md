@@ -40,6 +40,7 @@ redis must be running on localhost:6379 for tests.
 
 - plain javascript, ESM, no build step. package ships raw .js files
 - persistence adapters are subpath exports, not bundled. sqlite3/pg are optional peer deps
+- record deletion flushes through persistence. `deleteRecord` fires `onRecordRemoved`, which calls `persistenceManager.handleRecordRemoved`, buffered alongside writes and flushed via `adapter.removeRecords(ids)` (custom hooks use the optional `remove` hook). adapters MUST implement `removeRecords` or deleted records get resurrected by `restorePersistedRecords` on the next restart. within a flush window the last write/delete for a record id wins (each supersedes the other's buffer entry)
 - server uses composition (owns a WebSocketServer) not inheritance
 - `listen(port)` or `attach(httpServer)` handles all initialization in one call
 - MessageStream is per-server instance, not a singleton

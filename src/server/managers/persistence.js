@@ -10,6 +10,7 @@ export class PersistenceManager extends EventEmitter {
     this.recordPatterns = []
     this.messageBuffer = new Map()
     this.recordBuffer = new Map()
+    this.recordDeleteBuffer = new Set()
     this.flushTimers = new Map()
     this.recordFlushTimer = null
     this.isShuttingDown = false
@@ -37,8 +38,9 @@ export class PersistenceManager extends EventEmitter {
     serverLogger.info("processing pending record updates", { count: this.pendingRecordUpdates.length })
     const updates = [...this.pendingRecordUpdates]
     this.pendingRecordUpdates = []
-    for (const { recordId, value, version } of updates) {
-      this.handleRecordUpdate(recordId, value, version)
+    for (const update of updates) {
+      if (update.removed) this.handleRecordRemoved(update.recordId)
+      else this.handleRecordUpdate(update.recordId, update.value, update.version)
     }
   }
 
@@ -262,8 +264,31 @@ export class PersistenceManager extends EventEmitter {
       version,
       timestamp: Date.now(),
     }
+    // a write supersedes a pending delete for the same record
+    this.recordDeleteBuffer.delete(recordId)
     this.recordBuffer.set(recordId, persistedRecord)
-    if (this.recordBuffer.size >= config.maxBufferSize) {
+    if (this.recordBuffer.size + this.recordDeleteBuffer.size >= config.maxBufferSize) {
+      this.flushRecords()
+      return
+    }
+    if (!this.recordFlushTimer) {
+      this.recordFlushTimer = setTimeout(() => { this.flushRecords() }, config.flushInterval)
+      if (this.recordFlushTimer.unref) this.recordFlushTimer.unref()
+    }
+  }
+
+  handleRecordRemoved(recordId) {
+    if (this.isShuttingDown) return
+    if (!this.initialized) {
+      this.pendingRecordUpdates.push({ recordId, removed: true })
+      return
+    }
+    const config = this.getRecordPersistenceConfig(recordId)
+    if (!config) return
+    // a delete supersedes a pending write for the same record
+    this.recordBuffer.delete(recordId)
+    this.recordDeleteBuffer.add(recordId)
+    if (this.recordBuffer.size + this.recordDeleteBuffer.size >= config.maxBufferSize) {
       this.flushRecords()
       return
     }
@@ -274,13 +299,16 @@ export class PersistenceManager extends EventEmitter {
   }
 
   async flushRecords() {
-    if (this.recordBuffer.size === 0) return
+    if (this.recordBuffer.size === 0 && this.recordDeleteBuffer.size === 0) return
     if (this.recordFlushTimer) {
       clearTimeout(this.recordFlushTimer)
       this.recordFlushTimer = null
     }
     const records = Array.from(this.recordBuffer.values())
     this.recordBuffer.clear()
+    const deletedIds = Array.from(this.recordDeleteBuffer)
+    this.recordDeleteBuffer.clear()
+
     const recordsByAdapter = new Map()
     const recordsByPersistFn = new Map()
     for (const record of records) {
@@ -294,16 +322,39 @@ export class PersistenceManager extends EventEmitter {
         recordsByAdapter.get(config.adapter.adapter).push(record)
       }
     }
-    const handleFlushError = (failedRecords, err) => {
-      serverLogger.error("failed to flush records", { err })
-      if (!this.isShuttingDown) {
-        for (const record of failedRecords) this.recordBuffer.set(record.recordId, record)
-        if (!this.recordFlushTimer) {
-          this.recordFlushTimer = setTimeout(() => { this.flushRecords() }, 1000)
-          if (this.recordFlushTimer.unref) this.recordFlushTimer.unref()
-        }
+
+    const deletesByAdapter = new Map()
+    const deletesByRemoveFn = new Map()
+    for (const recordId of deletedIds) {
+      const config = this.getRecordPersistenceConfig(recordId)
+      if (!config) continue
+      if (config.hooks) {
+        if (!config.hooks.remove) continue
+        if (!deletesByRemoveFn.has(config.hooks.remove)) deletesByRemoveFn.set(config.hooks.remove, [])
+        deletesByRemoveFn.get(config.hooks.remove).push(recordId)
+      } else if (config.adapter) {
+        if (!deletesByAdapter.has(config.adapter.adapter)) deletesByAdapter.set(config.adapter.adapter, [])
+        deletesByAdapter.get(config.adapter.adapter).push(recordId)
       }
     }
+
+    const rebuffer = (rebufferFn) => {
+      if (this.isShuttingDown) return
+      rebufferFn()
+      if (!this.recordFlushTimer) {
+        this.recordFlushTimer = setTimeout(() => { this.flushRecords() }, 1000)
+        if (this.recordFlushTimer.unref) this.recordFlushTimer.unref()
+      }
+    }
+    const handleFlushError = (failedRecords, err) => {
+      serverLogger.error("failed to flush records", { err })
+      rebuffer(() => { for (const record of failedRecords) this.recordBuffer.set(record.recordId, record) })
+    }
+    const handleDeleteError = (failedIds, err) => {
+      serverLogger.error("failed to flush record deletions", { err })
+      rebuffer(() => { for (const recordId of failedIds) this.recordDeleteBuffer.add(recordId) })
+    }
+
     for (const [persistFn, persistRecords] of recordsByPersistFn.entries()) {
       try {
         const customRecords = persistRecords.map((r) => ({
@@ -325,6 +376,24 @@ export class PersistenceManager extends EventEmitter {
         }
       } catch (err) {
         handleFlushError(adapterRecords, err)
+      }
+    }
+    for (const [removeFn, removeIds] of deletesByRemoveFn.entries()) {
+      try {
+        await removeFn(removeIds)
+        this.emit("recordsRemoved", { count: removeIds.length })
+      } catch (err) {
+        handleDeleteError(removeIds, err)
+      }
+    }
+    for (const [adapter, removeIds] of deletesByAdapter.entries()) {
+      try {
+        if (adapter.removeRecords) {
+          await adapter.removeRecords(removeIds)
+          this.emit("recordsRemoved", { count: removeIds.length })
+        }
+      } catch (err) {
+        handleDeleteError(removeIds, err)
       }
     }
   }
