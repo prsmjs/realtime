@@ -40,14 +40,21 @@ export function useCollection(collectionId, options = {}) {
       const result = await client.subscribeCollection(id, {
         onDiff: (diff) => {
           if (!diff) return
+          // the collection tracks members by entry.id; the record value may not
+          // carry it, so key the stored item by entry.id to survive removals
+          const materialize = (entry) => {
+            const rec = entry.record ?? entry
+            if (entry.id == null || !rec || typeof rec !== 'object' || rec.id === entry.id) return rec
+            return { ...rec, id: entry.id }
+          }
           // a reset snapshot (initial subscribe, desync recovery, reconnect) is
           // authoritative: rebuild from it so removals during the gap converge
           let next = diff.reset ? [] : items.value.slice()
           if (Array.isArray(diff.added)) {
             for (const entry of diff.added) {
               const idx = next.findIndex((x) => x.id === entry.id)
-              if (idx === -1) next.push(entry.record ?? entry)
-              else next[idx] = entry.record ?? entry
+              if (idx === -1) next.push(materialize(entry))
+              else next[idx] = materialize(entry)
             }
           }
           if (Array.isArray(diff.removed)) {
@@ -57,7 +64,7 @@ export function useCollection(collectionId, options = {}) {
           if (Array.isArray(diff.changed)) {
             for (const entry of diff.changed) {
               const idx = next.findIndex((x) => x.id === entry.id)
-              if (idx !== -1) next[idx] = entry.record ?? entry
+              if (idx !== -1) next[idx] = materialize(entry)
             }
           }
           items.value = next

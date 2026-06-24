@@ -9,10 +9,14 @@ export function createRecordSubscriptions(client) {
     for (const [collectionId, collectionSub] of client.collectionSubscriptions.entries()) {
       if (collectionSub.ids.has(recordId) && collectionSub.onDiff) {
         try {
+          // stamp the collection-member id onto the record: the raw record value
+          // may not carry the id the collection tracks (server resolvers inject
+          // it), and dropping it strands the item on a later removal
+          const record = full && typeof full === "object" ? { ...full, id: recordId } : full
           await collectionSub.onDiff({
             added: [],
             removed: [],
-            changed: [{ id: recordId, record: full }],
+            changed: [{ id: recordId, record }],
             version,
           })
         } catch (error) {
