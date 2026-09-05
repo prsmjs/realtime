@@ -322,6 +322,47 @@ realtime.exposeChannel(/^chat:.+$/, (channel, connection) => {
 })
 ```
 
+### Transactions
+
+Atomic multi-record mutations. Either every operation commits or none do, and concurrent transactions on the same records serialize instead of conflicting.
+
+Server side — stage writes/deletes in a callback and commit everything atomically via a single Redis Lua script. The transaction holds a **pessimistic record lock** (Redis `SET NX EX`, same idiom as the instance-cleanup lock) for the duration of the callback and its atomic commit, so the callback runs **exactly once** and reads live data (no retry loop, no version oracle). The callback may have side effects, but only the staged record ops are atomic — a throw before commit leaves prior side effects alone (they are not rolled back):
+
+```js
+// lock exactly the three records: disjoint transactions run concurrently
+const { id, result, changes } = await server.transaction(async (tx) => {
+  const account = await tx.getRecord('account:42')
+  const balance = account?.balance ?? 0
+  tx.writeRecord('account:42', { balance: balance + amount }, { strategy: 'merge' })
+  tx.writeRecord('ledger:99', { entry: 'deposit', amount, at: Date.now() })
+  await tx.deleteRecord('draft:old')
+  return { balance: balance + amount }
+}, { records: ['account:42', 'ledger:99', 'draft:old'] })
+```
+
+Pass `{ records }` when the touched set is known up front so only those records are locked (in sorted order — deadlock-free), letting transactions on disjoint data run concurrently. Without it, a single global transaction lock serializes all transactions on the namespace (safe default for callbacks whose touched set is not knowable ahead of time):
+
+```js
+const { id, result } = await server.transaction(async (tx) => {
+  const state = await tx.getRecord('state:1')
+  tx.writeRecord('state:1', { ...state, hits: (state?.hits ?? 0) + 1 })
+})
+```
+
+Locks expire after 10 seconds (crash-safe); acquisition waits up to 5 seconds before throwing `TransactionError`. `getRecord` reflects staged writes (read-your-writes), and `replace` / `merge` / `deepMerge` strategies are supported.
+
+Client side — commit a fixed batch in one round trip. The record set is known from the operations, so exactly those records are locked (disjoint batches run concurrently). The server validates that each record is writable by the connection up front, so a bad operation rejects the whole batch:
+
+```js
+const { id, results } = await client.transaction([
+  { op: 'write', recordId: 'account:42', value: { balance: 1250 }, options: { strategy: 'merge' } },
+  { op: 'write', recordId: 'ledger:99', value: { entry: 'deposit', amount: 250 } },
+  { op: 'delete', recordId: 'draft:old' },
+])
+```
+
+Both paths run through the same atomic Lua commit and emit normal record updates to subscribers, so `patch` mode, collections, and persistence behave as for single-record writes (with one caveat: a publish failure after a successful commit is logged via `emitError`, not retried — the data is committed but the event can be missed).
+
 ### Tracing
 
 Pass a `@prsm/trace` tracer to the server and every command, record write, and channel publish becomes a span in the active trace.

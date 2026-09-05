@@ -251,6 +251,30 @@ export class RealtimeClient extends EventEmitter {
     }
   }
 
+  /**
+   * Atomically commit a batch of record mutations on the server. Either every
+   * operation lands or none do; a failed batch rejects rather than partially
+   * applying. Requires the server to expose each record as writable. Ops look
+   * like `{ op: 'write', recordId, value, options? }` or
+   * `{ op: 'delete', recordId }`. The batch holds pessimistic record locks on
+   * the touched records, so concurrent batches on the same records serialize.
+   * The server also accepts `server.transaction(fn, { records })` for
+   * multi-step read-compute-write transactions under the same lock.
+   *
+   * @param {Array<{op: 'write'|'delete', recordId: string, value?: any, options?: Object}>} operations
+   * @returns {Promise<{id: string, results: Array<{op: 'write'|'delete', recordId: string, success: boolean, version: number}>}>} Resolves with the transaction id and per-record outcomes when the batch committed atomically.
+   */
+  async transaction(operations) {
+    if (!Array.isArray(operations) || operations.length === 0) {
+      throw new CodeError("Transaction requires a non-empty array of operations", "ETXN", "TransactionError")
+    }
+    const result = await this.command("rt/transaction", { operations })
+    if (result && typeof result === "object" && result.error) {
+      throw new CodeError(result.error, result.code || "ETXN", result.name || "TransactionError")
+    }
+    return result
+  }
+
   _setupConnectionEvents() {
     this.connection.on("message", (data) => {
       this.emit("message", data)

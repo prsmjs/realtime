@@ -1,7 +1,7 @@
 import { createServer as createHttpServer } from "node:http"
 import { randomUUID } from "node:crypto"
 import { WebSocketServer } from "ws"
-import { LogLevel, configureLogLevel, Status, serverLogger, parseCommand } from "../shared/index.js"
+import { CodeError, LogLevel, configureLogLevel, Status, serverLogger, parseCommand } from "../shared/index.js"
 import { Connection } from "./connection.js"
 import { PUB_SUB_CHANNEL_PREFIX } from "./utils/constants.js"
 import { ConnectionManager } from "./managers/connections.js"
@@ -17,6 +17,7 @@ import { RedisManager } from "./managers/redis.js"
 import { InstanceManager } from "./managers/instance.js"
 import { CollectionManager } from "./managers/collections.js"
 import { PersistenceManager } from "./managers/persistence.js"
+import { TransactionManager } from "./managers/transactions.js"
 import { MessageStream } from "./message-stream.js"
 
 const pendingAuthDataStore = new WeakMap()
@@ -148,6 +149,14 @@ export class RealtimeServer {
       recordManager: this.recordManager,
       emitError: (err) => this._emitError(err),
       persistenceManager: this.persistenceManager,
+    })
+
+    this.transactionManager = new TransactionManager({
+      redis: this.redisManager.redis,
+      recordManager: this.recordManager,
+      recordSubscriptionManager: this.recordSubscriptionManager,
+      persistenceManager: this.persistenceManager,
+      emitError: (err) => this._emitError(err),
     })
 
     this.collectionManager = new CollectionManager({ redis: this.redisManager.redis, emitError: (err) => this._emitError(err) })
@@ -542,6 +551,29 @@ export class RealtimeServer {
    */
   exposeWritableRecord(recordPattern, guard) {
     this.recordSubscriptionManager.exposeWritableRecord(recordPattern, guard)
+  }
+
+  /**
+   * Run an atomic transaction over records. The callback receives a staging
+   * surface (`tx.writeRecord`, `tx.deleteRecord`, `tx.getRecord`) whose
+   * operations are committed together atomically via a single Redis Lua
+   * script - either all of them land or none do. The transaction holds a
+   * pessimistic record lock (Redis `SET NX EX`) for the duration of the
+   * callback, so the callback runs exactly once, may have side effects, and
+   * reads live data. Pass `{ records }` to lock exactly those records (in
+   * sorted order, deadlock-free) and let disjoint transactions run
+   * concurrently; without it, a global transaction lock serializes all
+   * transactions on the namespace.
+   *
+   * The return value of the callback becomes `result` in the resolved object.
+   * `changes` lists each applied operation with its new record version.
+   *
+   * @param {(tx: import('./managers/transactions.js').TransactionContext) => any | Promise<any>} fn
+   * @param {{records?: string[]}} [options]
+   * @returns {Promise<{id: string, result: any, changes: Array<{recordId: string, patch?: import('fast-json-patch').Operation[], version: number, finalValue?: any, deleted?: boolean, value?: any}>}>}
+   */
+  transaction(fn, options) {
+    return this.transactionManager.transaction(fn, options)
   }
 
   /**
@@ -969,6 +1001,24 @@ export class RealtimeServer {
       const { roomName } = ctx.payload
       const metadata = await this.roomManager.getMetadata(roomName)
       return { metadata }
+    })
+
+    this.exposeCommand("rt/transaction", async (ctx) => {
+      const { operations } = ctx.payload
+      if (!Array.isArray(operations) || operations.length === 0) {
+        throw new CodeError("Transaction requires a non-empty array of operations", "ETXN", "TransactionError")
+      }
+      // validate writability up front so a bad op aborts the whole batch
+      for (const op of operations) {
+        const recordId = op?.recordId
+        if (!recordId || typeof recordId !== "string" || (op.op !== "write" && op.op !== "delete")) {
+          throw new CodeError("Invalid transaction operation", "ETXN", "TransactionError")
+        }
+        if (!(await this.recordSubscriptionManager.isRecordWritable(recordId, ctx.connection))) {
+          throw new CodeError(`Record "${recordId}" is not writable by this connection.`, "ETXN", "TransactionError")
+        }
+      }
+      return this.transactionManager.commitBatch(operations)
     })
   }
 

@@ -61,16 +61,7 @@ export class RecordManager {
     pipeline.set(versionKey, newVersion.toString())
     await pipeline.exec()
 
-    if (this.recordUpdateCallbacks.length > 0) {
-      Promise.all(
-        this.recordUpdateCallbacks.map(async (callback) => {
-          try { await callback({ recordId, value: finalValue }) }
-          catch (error) { serverLogger.error("error in record update callback", { recordId, err: error }) }
-        })
-      ).catch((error) => {
-        serverLogger.error("error in record update callbacks", { recordId, err: error })
-      })
-    }
+    this.notifyRecordUpdated(recordId, finalValue)
 
     return { patch, version: newVersion, finalValue }
   }
@@ -84,18 +75,51 @@ export class RecordManager {
     pipeline.del(this.recordVersionKey(recordId))
     await pipeline.exec()
 
+    this.notifyRecordRemoved(recordId, record)
+
+    return { version }
+  }
+
+  /**
+   * Fire registered update callbacks (notifications only; the caller is
+   * responsible for persisting the new state). Used by the transaction path,
+   * which writes to Redis directly via an atomic Lua script.
+   * @param {string} recordId
+   * @param {any} value
+   * @returns {void}
+   */
+  notifyRecordUpdated(recordId, value) {
+    if (this.recordUpdateCallbacks.length > 0) {
+      Promise.all(
+        this.recordUpdateCallbacks.map(async (callback) => {
+          try { await callback({ recordId, value }) }
+          catch (error) { serverLogger.error("error in record update callback", { recordId, err: error }) }
+        })
+      ).catch((error) => {
+        serverLogger.error("error in record update callbacks", { recordId, err: error })
+      })
+    }
+  }
+
+  /**
+   * Fire registered removal callbacks (notifications only). Used by the
+   * transaction path, which deletes from Redis directly via an atomic Lua
+   * script.
+   * @param {string} recordId
+   * @param {any} value
+   * @returns {void}
+   */
+  notifyRecordRemoved(recordId, value) {
     if (this.recordRemovedCallbacks.length > 0) {
       Promise.all(
         this.recordRemovedCallbacks.map(async (callback) => {
-          try { await callback({ recordId, value: record }) }
+          try { await callback({ recordId, value }) }
           catch (error) { serverLogger.error("error in record removed callback", { recordId, err: error }) }
         })
       ).catch((error) => {
         serverLogger.error("error in record removed callbacks", { recordId, err: error })
       })
     }
-
-    return { version }
   }
 
   onRecordUpdate(callback) {
