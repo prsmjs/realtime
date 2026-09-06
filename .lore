@@ -1,0 +1,3 @@
+-- pitfalls --
+
+Server messages sent from an onConnection handler (via connection.send) can arrive at the client before code that runs after `await client.connect()` executes. RealtimeClient drops emitted events with no registered listener, so any `client.on("my/command", ...)` listeners must be registered BEFORE calling connect(), otherwise connection-time messages are silently lost. Registering listeners on a not-yet-connected client is safe; connect() afterward.
