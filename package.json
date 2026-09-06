@@ -4,6 +4,10 @@
   "description": "Distributed WebSocket framework with Redis-backed rooms, records, presence, channels, collections, and persistence",
   "type": "module",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prsmjs/realtime.git"
+  },
   "exports": {
     ".": {
       "types": "./types/index.d.ts",

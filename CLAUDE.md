@@ -69,6 +69,4 @@ tests use vitest with `pool: "forks"` and `singleFork: true` (sequential executi
 
 ## publishing
 
-```
-npm publish --access public
-```
+publishing runs through `.github/workflows/publish.yml` on version tags (for example `realtime@1.8.0`), never through a local publish command. the workflow uses npm trusted publishing with node 24, current npm, and `id-token: write`; no `NPM_TOKEN` is used. package.json repository.url must match `prsmjs/realtime` for provenance verification. npm's trusted publisher must name owner `prsmjs`, repository `realtime`, and workflow `publish.yml` (no environment). verify that configuration before tagging a release.
