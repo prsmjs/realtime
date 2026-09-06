@@ -322,6 +322,48 @@ realtime.exposeChannel(/^chat:.+$/, (channel, connection) => {
 })
 ```
 
+### Transactions
+
+Commit related record changes together. For example, reserve a seat only when one remains:
+
+```js
+server.exposeCommand('reserve', async ({ payload: { eventId } }) => {
+  const eventKey = `event:${eventId}`
+  const bookingKey = `booking:${crypto.randomUUID()}`
+  const { result } = await server.transaction(async tx => {
+    const event = await tx.getRecord(eventKey)
+    if (!event || event.seats < 1) throw new Error('Sold out')
+    tx.writeRecord(eventKey, { ...event, seats: event.seats - 1 })
+    tx.writeRecord(bookingKey, { eventId })
+    return { bookingId: bookingKey }
+  }, { records: [eventKey, bookingKey] })
+  return result
+})
+
+// Client
+const { bookingId } = await client.command('reserve', { eventId: 'concert' })
+```
+
+`server.transaction(fn, { records })` locks every listed record before calling `fn`. Every read, write, and deletion must use the supplied `tx` and refer to a listed record. Disjoint record sets can proceed concurrently. Omit `records` to exclude all other record writers while the callback runs. Ordinary record writes and deletions use the same locks across server instances.
+
+The callback runs once. A thrown error discards its staged changes; external effects such as emails or payments cannot be rolled back. Nested transactions and ordinary record writes inside the callback are rejected. Locks renew while held, expire after 10 seconds without renewal, and are checked at commit. Acquisition waits up to 5 seconds before rejecting.
+
+`tx.getRecord(id)` returns a detached value reflecting staged changes. `tx.writeRecord(id, value, { strategy })` supports `replace`, `merge`, and `deepMerge`. The last staged operation for a record wins, with merges applied to its committed value. The context closes when the callback finishes. The result is `{ id, result, changes }`, where `result` is the callback's return value and `changes` contains changed records with their versions.
+
+For predetermined client edits, `client.transaction(operations)` batches writes and deletions in one request:
+
+```js
+await client.transaction([
+  { op: 'write', recordId: 'profile:42', value: { name: 'Sam' }, options: { strategy: 'merge' } },
+  { op: 'write', recordId: 'preferences:42', value: { theme: 'dark' } },
+  { op: 'delete', recordId: 'draft:42' },
+])
+```
+
+Each record may appear once in a client batch and must be writable by that connection. Invalid operations reject the batch without changes. The response is `{ id, results }`, with an operation, record ID, success flag, and version for each entry. Unchanged writes and missing deletions succeed without changing versions.
+
+Atomicity applies to Redis record storage, not subscriber delivery or persistence adapters. Subscribers receive separate record updates, and persistence follows its normal buffering rules. Notification failures are reported without undoing a committed transaction. Run the same package version on all writers; direct Redis writes and older servers do not participate in these locks. A lost connection during commit can leave its outcome unknown, so do not blindly retry callbacks with external effects.
+
 ### Tracing
 
 Pass a `@prsm/trace` tracer to the server and every command, record write, and channel publish becomes a span in the active trace.

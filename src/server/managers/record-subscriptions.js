@@ -165,6 +165,25 @@ export class RecordSubscriptionManager {
     } catch {}
   }
 
+  /**
+   * Publish a record update to all instances (subscriber fan-out only; does not
+   * write to Redis). Used by the transaction path, which already committed the
+   * new state atomically via a Lua script under the transaction record lock.
+   * @param {string} recordId
+   * @param {any} newValue
+   * @param {import('fast-json-patch').Operation[]} patch
+   * @param {number} version
+   * @returns {Promise<void>}
+   */
+  async publishRecordUpdate(recordId, newValue, patch, version) {
+    const messagePayload = { recordId, newValue, patch, version }
+    try {
+      await this.pubClient.publish(RECORD_PUB_SUB_CHANNEL, JSON.stringify(messagePayload))
+    } catch (err) {
+      this.emitError(new Error(`Failed to publish record update for "${recordId}": ${err}`))
+    }
+  }
+
   async publishRecordDeletion(recordId, version) {
     const messagePayload = { recordId, deleted: true, version }
     try {

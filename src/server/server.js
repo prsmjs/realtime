@@ -1,7 +1,7 @@
 import { createServer as createHttpServer } from "node:http"
 import { randomUUID } from "node:crypto"
 import { WebSocketServer } from "ws"
-import { LogLevel, configureLogLevel, Status, serverLogger, parseCommand } from "../shared/index.js"
+import { CodeError, LogLevel, configureLogLevel, Status, serverLogger, parseCommand } from "../shared/index.js"
 import { Connection } from "./connection.js"
 import { PUB_SUB_CHANNEL_PREFIX } from "./utils/constants.js"
 import { ConnectionManager } from "./managers/connections.js"
@@ -17,6 +17,7 @@ import { RedisManager } from "./managers/redis.js"
 import { InstanceManager } from "./managers/instance.js"
 import { CollectionManager } from "./managers/collections.js"
 import { PersistenceManager } from "./managers/persistence.js"
+import { TransactionManager } from "./managers/transactions.js"
 import { MessageStream } from "./message-stream.js"
 
 const pendingAuthDataStore = new WeakMap()
@@ -148,6 +149,14 @@ export class RealtimeServer {
       recordManager: this.recordManager,
       emitError: (err) => this._emitError(err),
       persistenceManager: this.persistenceManager,
+    })
+
+    this.transactionManager = new TransactionManager({
+      redis: this.redisManager.redis,
+      recordManager: this.recordManager,
+      recordSubscriptionManager: this.recordSubscriptionManager,
+      persistenceManager: this.persistenceManager,
+      emitError: (err) => this._emitError(err),
     })
 
     this.collectionManager = new CollectionManager({ redis: this.redisManager.redis, emitError: (err) => this._emitError(err) })
@@ -542,6 +551,21 @@ export class RealtimeServer {
    */
   exposeWritableRecord(recordPattern, guard) {
     this.recordSubscriptionManager.exposeWritableRecord(recordPattern, guard)
+  }
+
+  /**
+   * Commit related record changes together. Explicit records permit disjoint transactions
+   * to run concurrently and must include every accessed record. Without records, all
+   * record writers are excluded. Use only the supplied context for record mutations.
+   * The callback runs once; external side effects are not rolled back. Locks renew while
+   * held and ownership is checked at commit. Subscriber delivery and persistence are separate.
+   *
+   * @param {(tx: import('./managers/transactions.js').TransactionContext) => any | Promise<any>} fn
+   * @param {{records?: string[]}} [options]
+   * @returns {Promise<{id: string, result: any, changes: Array<{recordId: string, patch?: import('fast-json-patch').Operation[], version: number, finalValue?: any, deleted?: boolean, value?: any}>}>}
+   */
+  transaction(fn, options) {
+    return this.transactionManager.transaction(fn, options)
   }
 
   /**
@@ -969,6 +993,24 @@ export class RealtimeServer {
       const { roomName } = ctx.payload
       const metadata = await this.roomManager.getMetadata(roomName)
       return { metadata }
+    })
+
+    this.exposeCommand("rt/transaction", async (ctx) => {
+      const { operations } = ctx.payload
+      if (!Array.isArray(operations) || operations.length === 0) {
+        throw new CodeError("Transaction requires a non-empty array of operations", "ETXN", "TransactionError")
+      }
+      // validate writability up front so a bad op aborts the whole batch
+      for (const op of operations) {
+        const recordId = op?.recordId
+        if (!recordId || typeof recordId !== "string" || (op.op !== "write" && op.op !== "delete")) {
+          throw new CodeError("Invalid transaction operation", "ETXN", "TransactionError")
+        }
+        if (!(await this.recordSubscriptionManager.isRecordWritable(recordId, ctx.connection))) {
+          throw new CodeError(`Record "${recordId}" is not writable by this connection.`, "ETXN", "TransactionError")
+        }
+      }
+      return this.transactionManager.commitBatch(operations)
     })
   }
 
