@@ -55,6 +55,14 @@ redis must be running on localhost:6379 for tests.
 - useConnectionMetadata treats the local ref as source of truth: set() writes through and the value is re-pushed on reconnect, since a reconnect gets a fresh server-side connection
 - vue layer tests: connection.test.js is pure unit (fake client, no infra), vue.test.js is live client-server (needs redis)
 
+## transaction invariants
+
+- `record-store.js` is shared by transactions and ordinary record mutations. global locks exclude all record writers; explicit record sets permit disjoint work. acquisition is atomic, leases renew, and commit verifies ownership plus every read snapshot before mutations
+- JSON values remain opaque strings in Lua. merging and patch generation happen in JavaScript before commit; do not decode and re-encode record values with Redis cjson (empty arrays and precise numbers change)
+- transaction contexts close when callbacks finish. explicit records must include every accessed ID; nested transactions and ordinary writes inside callbacks reject. server staging is last-operation-wins; duplicate IDs in client batches reject
+- Redis storage commits are separate from subscriber notifications and buffered persistence. all writers must run the same lock protocol; direct Redis writes and older servers bypass it
+- `tests/integration/transaction-regressions.test.js` covers rollback, contention across instances, ordinary writer exclusion, lease renewal/loss, JSON fidelity, context lifetime, and storage validation
+
 ## testing
 
 tests use vitest with `pool: "forks"` and `singleFork: true` (sequential execution, shared redis). each test file flushes its redis DB in beforeEach. all tests are client-server integration tests.

@@ -324,44 +324,45 @@ realtime.exposeChannel(/^chat:.+$/, (channel, connection) => {
 
 ### Transactions
 
-Atomic multi-record mutations. Either every operation commits or none do, and concurrent transactions on the same records serialize instead of conflicting.
-
-Server side — stage writes/deletes in a callback and commit everything atomically via a single Redis Lua script. The transaction holds a **pessimistic record lock** (Redis `SET NX EX`, same idiom as the instance-cleanup lock) for the duration of the callback and its atomic commit, so the callback runs **exactly once** and reads live data (no retry loop, no version oracle). The callback may have side effects, but only the staged record ops are atomic — a throw before commit leaves prior side effects alone (they are not rolled back):
+Commit related record changes together. For example, reserve a seat only when one remains:
 
 ```js
-// lock exactly the three records: disjoint transactions run concurrently
-const { id, result, changes } = await server.transaction(async (tx) => {
-  const account = await tx.getRecord('account:42')
-  const balance = account?.balance ?? 0
-  tx.writeRecord('account:42', { balance: balance + amount }, { strategy: 'merge' })
-  tx.writeRecord('ledger:99', { entry: 'deposit', amount, at: Date.now() })
-  await tx.deleteRecord('draft:old')
-  return { balance: balance + amount }
-}, { records: ['account:42', 'ledger:99', 'draft:old'] })
-```
-
-Pass `{ records }` when the touched set is known up front so only those records are locked (in sorted order — deadlock-free), letting transactions on disjoint data run concurrently. Without it, a single global transaction lock serializes all transactions on the namespace (safe default for callbacks whose touched set is not knowable ahead of time):
-
-```js
-const { id, result } = await server.transaction(async (tx) => {
-  const state = await tx.getRecord('state:1')
-  tx.writeRecord('state:1', { ...state, hits: (state?.hits ?? 0) + 1 })
+server.exposeCommand('reserve', async ({ payload: { eventId } }) => {
+  const eventKey = `event:${eventId}`
+  const bookingKey = `booking:${crypto.randomUUID()}`
+  const { result } = await server.transaction(async tx => {
+    const event = await tx.getRecord(eventKey)
+    if (!event || event.seats < 1) throw new Error('Sold out')
+    tx.writeRecord(eventKey, { ...event, seats: event.seats - 1 })
+    tx.writeRecord(bookingKey, { eventId })
+    return { bookingId: bookingKey }
+  }, { records: [eventKey, bookingKey] })
+  return result
 })
+
+// Client
+const { bookingId } = await client.command('reserve', { eventId: 'concert' })
 ```
 
-Locks expire after 10 seconds (crash-safe); acquisition waits up to 5 seconds before throwing `TransactionError`. `getRecord` reflects staged writes (read-your-writes), and `replace` / `merge` / `deepMerge` strategies are supported.
+`server.transaction(fn, { records })` locks every listed record before calling `fn`. Every read, write, and deletion must use the supplied `tx` and refer to a listed record. Disjoint record sets can proceed concurrently. Omit `records` to exclude all other record writers while the callback runs. Ordinary record writes and deletions use the same locks across server instances.
 
-Client side — commit a fixed batch in one round trip. The record set is known from the operations, so exactly those records are locked (disjoint batches run concurrently). The server validates that each record is writable by the connection up front, so a bad operation rejects the whole batch:
+The callback runs once. A thrown error discards its staged changes; external effects such as emails or payments cannot be rolled back. Nested transactions and ordinary record writes inside the callback are rejected. Locks renew while held, expire after 10 seconds without renewal, and are checked at commit. Acquisition waits up to 5 seconds before rejecting.
+
+`tx.getRecord(id)` returns a detached value reflecting staged changes. `tx.writeRecord(id, value, { strategy })` supports `replace`, `merge`, and `deepMerge`. The last staged operation for a record wins, with merges applied to its committed value. The context closes when the callback finishes. The result is `{ id, result, changes }`, where `result` is the callback's return value and `changes` contains changed records with their versions.
+
+For predetermined client edits, `client.transaction(operations)` batches writes and deletions in one request:
 
 ```js
-const { id, results } = await client.transaction([
-  { op: 'write', recordId: 'account:42', value: { balance: 1250 }, options: { strategy: 'merge' } },
-  { op: 'write', recordId: 'ledger:99', value: { entry: 'deposit', amount: 250 } },
-  { op: 'delete', recordId: 'draft:old' },
+await client.transaction([
+  { op: 'write', recordId: 'profile:42', value: { name: 'Sam' }, options: { strategy: 'merge' } },
+  { op: 'write', recordId: 'preferences:42', value: { theme: 'dark' } },
+  { op: 'delete', recordId: 'draft:42' },
 ])
 ```
 
-Both paths run through the same atomic Lua commit and emit normal record updates to subscribers, so `patch` mode, collections, and persistence behave as for single-record writes (with one caveat: a publish failure after a successful commit is logged via `emitError`, not retried — the data is committed but the event can be missed).
+Each record may appear once in a client batch and must be writable by that connection. Invalid operations reject the batch without changes. The response is `{ id, results }`, with an operation, record ID, success flag, and version for each entry. Unchanged writes and missing deletions succeed without changing versions.
+
+Atomicity applies to Redis record storage, not subscriber delivery or persistence adapters. Subscribers receive separate record updates, and persistence follows its normal buffering rules. Notification failures are reported without undoing a committed transaction. Run the same package version on all writers; direct Redis writes and older servers do not participate in these locks. A lost connection during commit can leave its outcome unknown, so do not blindly retry callbacks with external effects.
 
 ### Tracing
 

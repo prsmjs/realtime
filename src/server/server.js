@@ -554,19 +554,11 @@ export class RealtimeServer {
   }
 
   /**
-   * Run an atomic transaction over records. The callback receives a staging
-   * surface (`tx.writeRecord`, `tx.deleteRecord`, `tx.getRecord`) whose
-   * operations are committed together atomically via a single Redis Lua
-   * script - either all of them land or none do. The transaction holds a
-   * pessimistic record lock (Redis `SET NX EX`) for the duration of the
-   * callback, so the callback runs exactly once, may have side effects, and
-   * reads live data. Pass `{ records }` to lock exactly those records (in
-   * sorted order, deadlock-free) and let disjoint transactions run
-   * concurrently; without it, a global transaction lock serializes all
-   * transactions on the namespace.
-   *
-   * The return value of the callback becomes `result` in the resolved object.
-   * `changes` lists each applied operation with its new record version.
+   * Commit related record changes together. Explicit records permit disjoint transactions
+   * to run concurrently and must include every accessed record. Without records, all
+   * record writers are excluded. Use only the supplied context for record mutations.
+   * The callback runs once; external side effects are not rolled back. Locks renew while
+   * held and ownership is checked at commit. Subscriber delivery and persistence are separate.
    *
    * @param {(tx: import('./managers/transactions.js').TransactionContext) => any | Promise<any>} fn
    * @param {{records?: string[]}} [options]

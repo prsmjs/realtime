@@ -56,7 +56,7 @@ describe("transactions", () => {
     expect(await server.getRecord("tx:acc")).toEqual({ balance: 150 })
   })
 
-  test("transaction with empty body commits without touching redis", async () => {
+  test("transaction with empty body commits without changing records", async () => {
     await server.listen(0)
     const { id, changes } = await server.transaction(async () => 42)
     expect(changes).toEqual([])
@@ -220,7 +220,7 @@ describe("transactions", () => {
     expect(await server.getRecord("tx:right")).toEqual({ count: 1 })
   })
 
-  test("transaction with failed write in later record leaves all records untouched", async () => {
+  test("valid batch writes a record and ignores a missing deletion", async () => {
     server.exposeRecord(/^tx:/)
     server.exposeWritableRecord(/^tx:/)
     await server.listen(0)
@@ -228,17 +228,10 @@ describe("transactions", () => {
     clientA = new RealtimeClient(`ws://localhost:${server.port}`)
     await clientA.connect()
 
-    // delete op on a record that has never existed is fine (no-op);
-    // a failed valid batch (writability check) must abort before applying
-    try {
-      await clientA.transaction([
-        { op: "write", recordId: "tx:a", value: { x: 1 } },
-        { op: "delete", recordId: "tx:b" },
-      ])
-    } catch (err) {
-      // ignored; the batch was valid, so this should not throw
-      expect(err).toBeUndefined()
-    }
+    await clientA.transaction([
+      { op: "write", recordId: "tx:a", value: { x: 1 } },
+      { op: "delete", recordId: "tx:b" },
+    ])
 
     expect(await server.getRecord("tx:a")).toEqual({ x: 1 })
     expect(await server.getRecord("tx:b")).toBeNull()

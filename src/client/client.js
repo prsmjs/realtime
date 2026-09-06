@@ -256,7 +256,7 @@ export class RealtimeClient extends EventEmitter {
    * operation lands or none do; a failed batch rejects rather than partially
    * applying. Requires the server to expose each record as writable. Ops look
    * like `{ op: 'write', recordId, value, options? }` or
-   * `{ op: 'delete', recordId }`. The batch holds pessimistic record locks on
+   * `{ op: 'delete', recordId }`. Each record may appear once. The batch holds record locks on
    * the touched records, so concurrent batches on the same records serialize.
    * The server also accepts `server.transaction(fn, { records })` for
    * multi-step read-compute-write transactions under the same lock.
